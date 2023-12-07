@@ -1,4 +1,13 @@
 #!/usr/bin/make -f
+DH_VERBOSE=1
+
+export DH_GOLANG_EXCLUDES = whitelist/example
 
 %:
-	dh $@
+	dh $@ --buildsystem=golang --with=golang
+
+override_dh_auto_test:
+	-dh_auto_test
+
+override_dh_auto_install:
+	dh_auto_install --destdir=debian/tmp
