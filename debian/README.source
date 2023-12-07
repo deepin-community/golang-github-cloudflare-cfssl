@@ -1,0 +1,4 @@
+There is a vendored version of the crypto/tls library, normally
+distributed with the golang-src package, in the scan/vendor
+directory.  This vendored code should be removed when the Go 
+packaging for Debian is updated to a more recent version.

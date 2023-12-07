@@ -1,22 +1,130 @@
-Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: template-repository
-Source: https://github.com/deepin-community/template-repository
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: cfssl
+Source: https://github.com/cloudflare/cfssl
 
 Files: *
-Copyright: 2023 Tsic404 <liuheng@deepin.org>
-License: GPL-2+
- This package is free software; you can redistribute it and/or modify
- it under the terms of the GNU General Public License as published by
- the Free Software Foundation; either version 2 of the License, or
- (at your option) any later version.
+Copyright: 2014 Cloudflare
+License: BSD-2-clause
+
+Files:
+    scan/vendor/crypto/tls/alert.go
+    scan/vendor/crypto/tls/cipher_suites.go
+    scan/vendor/crypto/tls/common.go
+    scan/vendor/crypto/tls/conn.go
+    scan/vendor/crypto/tls/generate_cert.go
+    scan/vendor/crypto/tls/handshake_client.go
+    scan/vendor/crypto/tls/handshake_messages.go
+    scan/vendor/crypto/tls/handshake_server.go
+    scan/vendor/crypto/tls/key_agreement.go
+    scan/vendor/crypto/tls/prf.go
+    scan/vendor/crypto/tls/ticket.go
+    scan/vendor/crypto/tls/tls.go
+    transport/roots/system/root.go
+    transport/roots/system/root_bsd.go
+    transport/roots/system/root_cgo_darwin.go
+    transport/roots/system/root_darwin.go
+    transport/roots/system/root_darwin_armx.go
+    transport/roots/system/root_darwin_test.go
+    transport/roots/system/root_linux.go
+    transport/roots/system/root_nacl.go
+    transport/roots/system/root_nocgo_darwin.go
+    transport/roots/system/root_plan9.go
+    transport/roots/system/root_solaris.go
+    transport/roots/system/root_unix.go
+    transport/roots/system/root_windows.go
+Copyright: 2009-2013, 2015 The Go Authors
+License: Go
+
+Files: whitelist/*
+Copyright: 2014 Kyle Isom
+License: Expat-Whitelist
+
+Files: debian/*
+Copyright: 2016 Tim Potter <tpot@hpe.com>
+License: BSD-2-clause
+Comment: Debian packaging is licensed under the same terms as upstream
+
+License: BSD-2-clause
+ Copyright (c) 2014 CloudFlare Inc.
  .
- This package is distributed in the hope that it will be useful,
- but WITHOUT ANY WARRANTY; without even the implied warranty of
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- GNU General Public License for more details.
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions
+ are met:
  .
- You should have received a copy of the GNU General Public License
- along with this program. If not, see <https://www.gnu.org/licenses/>
+ Redistributions of source code must retain the above copyright notice,
+ this list of conditions and the following disclaimer.
  .
- On Debian systems, the complete text of the GNU General
- Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
+ Redistributions in binary form must reproduce the above copyright notice,
+ this list of conditions and the following disclaimer in the documentation
+ and/or other materials provided with the distribution.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License: Go
+ Copyright © 2009 The Go Authors. All rights reserved.
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are
+ met:
+ .
+    * Redistributions of source code must retain the above copyright
+ notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+ copyright notice, this list of conditions and the following disclaimer
+ in the documentation and/or other materials provided with the
+ distribution.
+    * Neither the name of Google Inc. nor the names of its
+ contributors may be used to endorse or promote products derived from
+ this software without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ .
+ Subject to the terms and conditions of this License, Google hereby
+ grants to You a perpetual, worldwide, non-exclusive, no-charge,
+ royalty-free, irrevocable (except as stated in this section) patent
+ license to make, have made, use, offer to sell, sell, import, and
+ otherwise transfer this implementation of Go, where such license
+ applies only to those patent claims licensable by Google that are
+ necessarily infringed by use of this implementation of Go. If You
+ institute patent litigation against any entity (including a
+ cross-claim or counterclaim in a lawsuit) alleging that this
+ implementation of Go or a Contribution incorporated within this
+ implementation of Go constitutes direct or contributory patent
+ infringement, then any patent licenses granted to You under this
+ License for this implementation of Go shall terminate as of the date
+ such litigation is filed.
+
+License: Expat-Whitelist
+ Copyright (c) 2014 Kyle Isom <kyle@gokyle.org>
+ .
+ Permission to use, copy, modify, and distribute this software for any
+ purpose with or without fee is hereby granted, provided that the above
+ copyright notice and this permission notice appear in all copies.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
