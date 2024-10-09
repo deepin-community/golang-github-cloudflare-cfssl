@@ -15,6 +15,7 @@ package kp
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -22,11 +23,13 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"io/ioutil"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/cloudflare/cfssl/csr"
 	"github.com/cloudflare/cfssl/helpers"
+	"github.com/cloudflare/cfssl/helpers/derhelpers"
 	"github.com/cloudflare/cfssl/transport/core"
 )
 
@@ -242,8 +245,25 @@ func (sp *StandardProvider) Generate(algo string, size int) (err error) {
 		sp.internal.keyPEM = pem.EncodeToMemory(p)
 
 		sp.internal.priv = priv
+	case "ed25519":
+		seed := make([]byte, ed25519.SeedSize)
+		if _, err := io.ReadFull(rand.Reader, seed); err != nil {
+			return err
+		}
+		priv := ed25519.NewKeyFromSeed(seed)
+
+		keyPEM, err := derhelpers.MarshalEd25519PrivateKey(priv)
+		if err != nil {
+			return err
+		}
+		p := &pem.Block{
+			Type:  "Ed25519 PRIVATE KEY",
+			Bytes: keyPEM,
+		}
+		sp.internal.keyPEM = pem.EncodeToMemory(p)
+		sp.internal.priv = priv
 	default:
-		return errors.New("transport: invalid key algorithm; only RSA and ECDSA are supported")
+		return errors.New("transport: invalid key algorithm; only RSA, Ed25519 and ECDSA are supported")
 	}
 
 	return nil
@@ -259,6 +279,12 @@ func (sp *StandardProvider) Certificate() *x509.Certificate {
 // and attempts to produce a certificate signing request suitable for
 // sending to a certificate authority.
 func (sp *StandardProvider) CertificateRequest(req *csr.CertificateRequest) ([]byte, error) {
+	if sp.internal.priv == nil {
+		if req.KeyRequest == nil {
+			return nil, errors.New("transport: invalid key request in csr.CertificateRequest")
+		}
+		sp.Generate(req.KeyRequest.Algo(), req.KeyRequest.Size())
+	}
 	return csr.Generate(sp.internal.priv, req)
 }
 
@@ -282,7 +308,7 @@ func (sp *StandardProvider) Load() (err error) {
 		}
 	}()
 
-	sp.internal.keyPEM, err = ioutil.ReadFile(sp.Paths.KeyFile)
+	sp.internal.keyPEM, err = os.ReadFile(sp.Paths.KeyFile)
 	if err != nil {
 		return
 	}
@@ -294,7 +320,7 @@ func (sp *StandardProvider) Load() (err error) {
 
 	clearKey = false
 
-	sp.internal.certPEM, err = ioutil.ReadFile(sp.Paths.CertFile)
+	sp.internal.certPEM, err = os.ReadFile(sp.Paths.CertFile)
 	if err != nil {
 		return ErrCertificateUnavailable
 	}
@@ -316,6 +342,11 @@ func (sp *StandardProvider) Load() (err error) {
 	case *ecdsa.PublicKey:
 		if p.Type != "EC PRIVATE KEY" {
 			err = errors.New("transport: PEM type " + p.Type + " is invalid for an ECDSA key")
+			return
+		}
+	case ed25519.PublicKey:
+		if p.Type != "Ed25519 PRIVATE KEY" {
+			err = errors.New("transport: PEM type" + p.Type + "is invalid for an Ed25519 key")
 			return
 		}
 	default:
@@ -378,12 +409,12 @@ func (sp *StandardProvider) Store() error {
 		return errors.New("transport: provider does not have a key and certificate")
 	}
 
-	err := ioutil.WriteFile(sp.Paths.CertFile, sp.internal.certPEM, 0644)
+	err := os.WriteFile(sp.Paths.CertFile, sp.internal.certPEM, 0644)
 	if err != nil {
 		return err
 	}
 
-	return ioutil.WriteFile(sp.Paths.KeyFile, sp.internal.keyPEM, 0600)
+	return os.WriteFile(sp.Paths.KeyFile, sp.internal.keyPEM, 0600)
 }
 
 // X509KeyPair returns a tls.Certificate for the provider.

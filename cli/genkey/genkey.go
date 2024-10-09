@@ -28,6 +28,9 @@ func genkeyMain(args []string, c cli.Config) (err error) {
 	if err != nil {
 		return
 	}
+	if len(args) > 0 {
+		return errors.New("only one argument is accepted, please check with usage")
+	}
 
 	csrFileBytes, err := cli.ReadStdin(csrFile)
 	if err != nil {
@@ -35,7 +38,7 @@ func genkeyMain(args []string, c cli.Config) (err error) {
 	}
 
 	req := csr.CertificateRequest{
-		KeyRequest: csr.NewBasicKeyRequest(),
+		KeyRequest: csr.NewKeyRequest(),
 	}
 	err = json.Unmarshal(csrFileBytes, &req)
 	if err != nil {

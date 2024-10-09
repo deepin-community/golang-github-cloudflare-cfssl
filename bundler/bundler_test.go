@@ -5,21 +5,19 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/json"
-	"io/ioutil"
+	"os"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/cloudflare/cfssl/config"
 	"github.com/cloudflare/cfssl/errors"
 	"github.com/cloudflare/cfssl/helpers"
-	"github.com/cloudflare/cfssl/signer"
-	"github.com/cloudflare/cfssl/signer/local"
 	"github.com/cloudflare/cfssl/ubiquity"
 )
 
 const (
-	testCaBundle        = "testdata/ca-bundle.pem"
+	// from https://github.com/cloudflare/cfssl_trust/blob/master/ca-bundle.crt
+	testCaBundle = "testdata/ca-bundle.pem"
+	// from https://github.com/cloudflare/cfssl_trust/blob/master/int-bundle.crt
 	testIntCaBundle     = "testdata/int-bundle.pem"
 	testNSSRootBundle   = "testdata/nss.pem"
 	testMetadata        = "testdata/ca-bundle.crt.metadata"
@@ -178,14 +176,14 @@ func TestBundleWithECDSAKeyMarshalJSON(t *testing.T) {
 	}
 
 	key := obj["key"].(string)
-	keyBytes, _ := ioutil.ReadFile(leafKeyECDSA256)
+	keyBytes, _ := os.ReadFile(leafKeyECDSA256)
 	keyBytes = bytes.Trim(keyBytes, " \n")
 	if key != string(keyBytes) {
 		t.Fatal("key is not recovered.")
 	}
 
 	cert := obj["crt"].(string)
-	certBytes, _ := ioutil.ReadFile(leafECDSA256)
+	certBytes, _ := os.ReadFile(leafECDSA256)
 	certBytes = bytes.Trim(certBytes, " \n")
 	if cert != string(certBytes) {
 		t.Fatal("cert is not recovered.")
@@ -214,7 +212,7 @@ func TestBundleWithRSAKeyMarshalJSON(t *testing.T) {
 	}
 
 	key := obj["key"].(string)
-	keyBytes, _ := ioutil.ReadFile(leafKeyRSA2048)
+	keyBytes, _ := os.ReadFile(leafKeyRSA2048)
 	keyBytes = bytes.Trim(keyBytes, " \n")
 	if key != string(keyBytes) {
 		t.Error("key is", key)
@@ -223,7 +221,7 @@ func TestBundleWithRSAKeyMarshalJSON(t *testing.T) {
 	}
 
 	cert := obj["crt"].(string)
-	certBytes, _ := ioutil.ReadFile(leafRSA2048)
+	certBytes, _ := os.ReadFile(leafRSA2048)
 	certBytes = bytes.Trim(certBytes, " \n")
 	if cert != string(certBytes) {
 		t.Fatal("cert is not recovered.")
@@ -239,23 +237,10 @@ func TestBundleWithRSAKeyMarshalJSON(t *testing.T) {
 // Test marshal to JSON on hostnames
 func TestBundleHostnamesMarshalJSON(t *testing.T) {
 	b := newBundler(t)
-	bundle, err := b.BundleFromRemote("www.cloudflare.com", "", Ubiquitous)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hostnames, err := json.Marshal(bundle.Hostnames)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectedOne := []byte(`["www.cloudflare.com","cloudflare.com"]`)
-	expectedTheOther := []byte(`["cloudflare.com","www.cloudflare.com"]`)
-	if !bytes.Equal(hostnames, expectedOne) && !bytes.Equal(hostnames, expectedTheOther) {
-		t.Fatal("Hostnames construction failed for cloudflare.com.", string(hostnames))
-	}
 
-	bundle, _ = b.BundleFromPEMorDER(GoDaddyIntermediateCert, nil, Optimal, "")
+	bundle, _ := b.BundleFromPEMorDER(GoDaddyIntermediateCert, nil, Optimal, "")
 	expected := []byte(`["Go Daddy Secure Certification Authority"]`)
-	hostnames, _ = json.Marshal(bundle.Hostnames)
+	hostnames, _ := json.Marshal(bundle.Hostnames)
 	if !bytes.Equal(hostnames, expected) {
 		t.Fatal("Hostnames construction failed for godaddy root cert.", string(hostnames))
 	}
@@ -264,6 +249,7 @@ func TestBundleHostnamesMarshalJSON(t *testing.T) {
 
 // Tests on verifying the rebundle flag and error code in Bundle.Status when rebundling.
 func TestRebundleFromPEM(t *testing.T) {
+	t.Skip("expired cert https://github.com/cloudflare/cfssl/issues/1237")
 	newBundler := newCustomizedBundlerFromFile(t, testCFSSLRootBundle, interL1, "")
 	newBundle, err := newBundler.BundleFromPEMorDER(expiredBundlePEM, nil, Optimal, "")
 	if err != nil {
@@ -291,48 +277,6 @@ func TestRebundleFromPEM(t *testing.T) {
 	// The status must be {Code: ExpiringBit is not set, IsRebundled:true, ExpiringSKIs:{}}
 	if len(newBundle.Status.ExpiringSKIs) != 0 || !newBundle.Status.IsRebundled || newBundle.Status.Code&errors.BundleExpiringBit != 0 {
 		t.Fatal("Rebundle Status is incorrect.")
-	}
-
-}
-
-func TestRebundleExpiring(t *testing.T) {
-	// make a policy that generate a cert expires in one hour.
-	expiry := 1 * time.Hour
-	policy := &config.Signing{
-		Profiles: map[string]*config.SigningProfile{
-			"expireIn1Hour": {
-				Usage:        []string{"cert sign"},
-				Expiry:       expiry,
-				CAConstraint: config.CAConstraint{IsCA: true},
-			},
-		},
-		Default: config.DefaultConfig(),
-	}
-	// Generate a intermediate cert that expires in one hour.
-	expiringPEM := createInterCert(t, interL1CSR, policy, "expireIn1Hour")
-	rootBundlePEM, _ := ioutil.ReadFile(testCFSSLRootBundle)
-
-	// Use the expiring intermediate to initiate a bundler.
-	bundler, err := NewBundlerFromPEM(rootBundlePEM, expiringPEM)
-	if err != nil {
-		t.Fatalf("bundle failed. %s", err.Error())
-	}
-	newBundle, err := bundler.BundleFromPEMorDER(expiredBundlePEM, nil, Optimal, "")
-	if err != nil {
-		t.Fatalf("Re-bundle failed. %s", err.Error())
-	}
-	// Check the bundle content.
-	newChain := newBundle.Chain
-	if len(newChain) != 2 {
-		t.Fatalf("Expected bundle chain length is 2. Got %d.", len(newChain))
-	}
-	// The status must be {Code: ExpiringBit is set, IsRebundled:true, ExpiringSKIs:{"8860BA18A477B841041BD5EF7751C25B14BA203F"}}
-	if len(newBundle.Status.ExpiringSKIs) != 1 || !newBundle.Status.IsRebundled || newBundle.Status.Code&errors.BundleExpiringBit == 0 {
-		t.Fatal("Rebundle Status is incorrect.")
-	}
-	expectedSKI := "8860BA18A477B841041BD5EF7751C25B14BA203F"
-	if newBundle.Status.ExpiringSKIs[0] != expectedSKI {
-		t.Fatalf("Expected expiring cert SKI is %s, got %s\n", expectedSKI, newBundle.Status.ExpiringSKIs[0])
 	}
 
 }
@@ -429,7 +373,7 @@ func TestForceBundle(t *testing.T) {
 	interL1Bytes := signCSRFile(caSigner, interL1CSR, t)
 
 	// create a inter L1 signer
-	interL1KeyBytes, err := ioutil.ReadFile(interL1Key)
+	interL1KeyBytes, err := os.ReadFile(interL1Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +384,7 @@ func TestForceBundle(t *testing.T) {
 	interL2Bytes := signCSRFile(interL1Signer, interL2CSR, t)
 
 	// create a inter L2 signer
-	interL2KeyBytes, err := ioutil.ReadFile(interL2Key)
+	interL2KeyBytes, err := os.ReadFile(interL2Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +396,7 @@ func TestForceBundle(t *testing.T) {
 
 	// create two platforms
 	// both trust the CA cert and L1 intermediate
-	caBytes, err := ioutil.ReadFile(testCAFile)
+	caBytes, err := os.ReadFile(testCAFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +476,7 @@ func TestUpdateIntermediate(t *testing.T) {
 	caSigner := makeCASignerFromFile(testCAFile, testCAKeyFile, x509.SHA256WithRSA, t)
 	sha2InterBytes := signCSRFile(caSigner, interL1CSR, t)
 
-	interKeyBytes, err := ioutil.ReadFile(interL1Key)
+	interKeyBytes, err := os.ReadFile(interL1Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,7 +487,7 @@ func TestUpdateIntermediate(t *testing.T) {
 	leafBytes := signCSRFile(sha2InterSigner, leafCSR, t)
 
 	// read CA cert bytes
-	caCertBytes, err := ioutil.ReadFile(testCAFile)
+	caCertBytes, err := os.ReadFile(testCAFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +522,7 @@ func TestForceBundleNoFallback(t *testing.T) {
 	caSigner := makeCASignerFromFile(testCAFile, testCAKeyFile, x509.SHA256WithRSA, t)
 	sha2InterBytes := signCSRFile(caSigner, interL1CSR, t)
 
-	interKeyBytes, err := ioutil.ReadFile(interL1Key)
+	interKeyBytes, err := os.ReadFile(interL1Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +533,7 @@ func TestForceBundleNoFallback(t *testing.T) {
 	leafBytes := signCSRFile(sha2InterSigner, leafCSR, t)
 
 	// read CA cert bytes
-	caCertBytes, err := ioutil.ReadFile(testCAFile)
+	caCertBytes, err := os.ReadFile(testCAFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +566,7 @@ func TestSHA2HomogeneityAgainstUbiquity(t *testing.T) {
 	interL1Bytes := signCSRFile(caSigner, interL1CSR, t)
 
 	// create a inter L1 signer
-	interL1KeyBytes, err := ioutil.ReadFile(interL1Key)
+	interL1KeyBytes, err := os.ReadFile(interL1Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -633,7 +577,7 @@ func TestSHA2HomogeneityAgainstUbiquity(t *testing.T) {
 	interL2Bytes := signCSRFile(interL1Signer, interL2CSR, t)
 
 	// create a inter L2 signer
-	interL2KeyBytes, err := ioutil.ReadFile(interL2Key)
+	interL2KeyBytes, err := os.ReadFile(interL2Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +590,7 @@ func TestSHA2HomogeneityAgainstUbiquity(t *testing.T) {
 	// create two platforms
 	// platform A trusts the CA cert and L1 intermediate
 	// platform B trusts the CA cert
-	caBytes, err := ioutil.ReadFile(testCAFile)
+	caBytes, err := os.ReadFile(testCAFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -764,7 +708,7 @@ func TestSHA2Warning(t *testing.T) {
 	sha2InterBytes := signCSRFile(caSigner, interL1CSR, t)
 
 	// read CA cert bytes
-	caCertBytes, err := ioutil.ReadFile(testCAFile)
+	caCertBytes, err := os.ReadFile(testCAFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -808,7 +752,7 @@ func TestECDSAWarning(t *testing.T) {
 
 // readCert read a PEM file and returns a cert.
 func readCert(filename string) *x509.Certificate {
-	bytes, _ := ioutil.ReadFile(filename)
+	bytes, _ := os.ReadFile(filename)
 	cert, _ := helpers.ParseCertificatePEM(bytes)
 	return cert
 }
@@ -823,31 +767,6 @@ func newBundler(t *testing.T) (b *Bundler) {
 	return
 }
 
-// create a test intermediate cert in PEM
-func createInterCert(t *testing.T, csrFile string, policy *config.Signing, profileName string) (certPEM []byte) {
-	s, err := local.NewSignerFromFile(testCAFile, testCAKeyFile, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	csr, err := ioutil.ReadFile(csrFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := signer.SignRequest{
-		Hosts:   []string{"cloudflare-inter.com"},
-		Request: string(csr),
-		Profile: profileName,
-		Label:   "",
-	}
-
-	certPEM, err = s.Sign(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return
-
-}
-
 // newBundler creates bundler from byte slices of CA certs and intermediate certs in PEM format
 func newBundlerFromPEM(t *testing.T, caBundlePEM, intBundlePEM []byte) (b *Bundler) {
 	b, err := NewBundlerFromPEM(caBundlePEM, intBundlePEM)
@@ -858,14 +777,14 @@ func newBundlerFromPEM(t *testing.T, caBundlePEM, intBundlePEM []byte) (b *Bundl
 }
 
 // newCustomizedBundleCreator is a helper function that returns a new Bundler
-// takes specified CA bundle, intermediate bundle, and any additional intermdiate certs to generate a bundler.
+// takes specified CA bundle, intermediate bundle, and any additional intermediate certs to generate a bundler.
 func newCustomizedBundlerFromFile(t *testing.T, caBundle, intBundle, adhocInters string) (b *Bundler) {
 	b, err := NewBundler(caBundle, intBundle)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if adhocInters != "" {
-		moreIntersPEM, err := ioutil.ReadFile(adhocInters)
+		moreIntersPEM, err := os.ReadFile(adhocInters)
 		if err != nil {
 			t.Fatalf("Read additional intermediates failed. %v",
 				err)
@@ -953,6 +872,7 @@ func ExpectBundleLength(expectedLen int) func(*testing.T, *Bundle) {
 }
 
 func TestBundlerWithEmptyRootInfo(t *testing.T) {
+	t.Skip("broken relating to https://github.com/cloudflare/cfssl/issues/1230")
 	b := newBundlerWithoutRootsAndInters(t)
 
 	// "force" bundle should be ok
@@ -993,4 +913,17 @@ func TestBundlerWithEmptyRootInfo(t *testing.T) {
 	}
 	checkBundleFunc = ExpectBundleLength(2)
 	checkBundleFunc(t, bundle)
+}
+
+func TestBundlerClientAuth(t *testing.T) {
+	t.Skip("expired cert https://github.com/cloudflare/cfssl/issues/1237")
+	b, err := NewBundler("testdata/client-auth/root.pem", "testdata/client-auth/int.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leafFile := range []string{"testdata/client-auth/leaf-server.pem", "testdata/client-auth/leaf-client.pem"} {
+		if _, err := b.BundleFromFile(leafFile, "", Optimal, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

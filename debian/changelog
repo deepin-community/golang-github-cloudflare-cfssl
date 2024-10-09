@@ -1,3 +1,21 @@
+golang-github-cloudflare-cfssl (1.6.5-2) unstable; urgency=medium
+
+  * Team upload.
+  * Upload to unstable
+
+ -- Reinhard Tartler <siretart@tauware.de>  Fri, 26 Jul 2024 07:58:45 +0200
+
+golang-github-cloudflare-cfssl (1.6.5-1) experimental; urgency=medium
+
+  [ Alexandre Viau ]
+  * Point Vcs-* urls to salsa.debian.org.
+
+  [ Reinhard Tartler ]
+  * Team upload.
+  * New upstream version, closes: #975550
+
+ -- Reinhard Tartler <siretart@tauware.de>  Sun, 30 Jun 2024 16:03:24 -0400
+
 golang-github-cloudflare-cfssl (1.2.0+git20160825.89.7fb22c8-3.1) unstable; urgency=medium
 
   * Non maintainer upload by the Reproducible Builds team.
@@ -8,7 +26,7 @@ golang-github-cloudflare-cfssl (1.2.0+git20160825.89.7fb22c8-3.1) unstable; urge
 golang-github-cloudflare-cfssl (1.2.0+git20160825.89.7fb22c8-3) unstable; urgency=medium
 
   * Replace golang-go with golang-any in Build-Depends, remove golang-go from
-    Depends 
+    Depends
 
  -- Konstantinos Margaritis <markos@debian.org>  Wed, 09 Aug 2017 15:18:51 +0300
 

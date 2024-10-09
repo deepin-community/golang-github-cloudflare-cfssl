@@ -8,15 +8,23 @@
 package ocsp
 
 import (
+	"crypto"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"time"
 
+	"github.com/cloudflare/cfssl/certdb"
+	"github.com/cloudflare/cfssl/certdb/dbconf"
+	"github.com/cloudflare/cfssl/certdb/sql"
 	"github.com/cloudflare/cfssl/log"
 	"github.com/jmhodges/clock"
 	"golang.org/x/crypto/ocsp"
@@ -28,14 +36,25 @@ var (
 	tryLaterErrorResponse         = []byte{0x30, 0x03, 0x0A, 0x01, 0x03}
 	sigRequredErrorResponse       = []byte{0x30, 0x03, 0x0A, 0x01, 0x05}
 	unauthorizedErrorResponse     = []byte{0x30, 0x03, 0x0A, 0x01, 0x06}
+
+	// ErrNotFound indicates the request OCSP response was not found. It is used to
+	// indicate that the responder should reply with unauthorizedErrorResponse.
+	ErrNotFound = errors.New("Request OCSP Response not found")
 )
 
 // Source represents the logical source of OCSP responses, i.e.,
 // the logic that actually chooses a response based on a request.  In
 // order to create an actual responder, wrap one of these in a Responder
-// object and pass it to http.Handle.
+// object and pass it to http.Handle. By default the Responder will set
+// the headers Cache-Control to "max-age=(response.NextUpdate-now), public, no-transform, must-revalidate",
+// Last-Modified to response.ThisUpdate, Expires to response.NextUpdate,
+// ETag to the SHA256 hash of the response, and Content-Type to
+// application/ocsp-response. If you want to override these headers,
+// or set extra headers, your source should return a http.Header
+// with the headers you wish to set. If you don't want to set any
+// extra headers you may return nil instead.
 type Source interface {
-	Response(*ocsp.Request) ([]byte, bool)
+	Response(*ocsp.Request) ([]byte, http.Header, error)
 }
 
 // An InMemorySource is a map from serialNumber -> der(response)
@@ -44,9 +63,67 @@ type InMemorySource map[string][]byte
 // Response looks up an OCSP response to provide for a given request.
 // InMemorySource looks up a response purely based on serial number,
 // without regard to what issuer the request is asking for.
-func (src InMemorySource) Response(request *ocsp.Request) (response []byte, present bool) {
-	response, present = src[request.SerialNumber.String()]
-	return
+func (src InMemorySource) Response(request *ocsp.Request) ([]byte, http.Header, error) {
+	response, present := src[request.SerialNumber.String()]
+	if !present {
+		return nil, nil, ErrNotFound
+	}
+	return response, nil, nil
+}
+
+// DBSource represnts a source of OCSP responses backed by the certdb package.
+type DBSource struct {
+	Accessor certdb.Accessor
+}
+
+// NewDBSource creates a new DBSource type with an associated dbAccessor.
+func NewDBSource(dbAccessor certdb.Accessor) Source {
+	return DBSource{
+		Accessor: dbAccessor,
+	}
+}
+
+// Response implements cfssl.ocsp.responder.Source, which returns the
+// OCSP response in the Database for the given request with the expiration
+// date furthest in the future.
+func (src DBSource) Response(req *ocsp.Request) ([]byte, http.Header, error) {
+	if req == nil {
+		return nil, nil, errors.New("called with nil request")
+	}
+
+	aki := hex.EncodeToString(req.IssuerKeyHash)
+	sn := req.SerialNumber
+
+	if sn == nil {
+		return nil, nil, errors.New("request contains no serial")
+	}
+	strSN := sn.String()
+
+	if src.Accessor == nil {
+		log.Errorf("No DB Accessor")
+		return nil, nil, errors.New("called with nil DB accessor")
+	}
+	records, err := src.Accessor.GetOCSP(strSN, aki)
+
+	// Response() logs when there are errors obtaining the OCSP response
+	// and returns nil, false.
+	if err != nil {
+		log.Errorf("Error obtaining OCSP response: %s", err)
+		return nil, nil, fmt.Errorf("failed to obtain OCSP response: %s", err)
+	}
+
+	if len(records) == 0 {
+		return nil, nil, ErrNotFound
+	}
+
+	// Response() finds the OCSPRecord with the expiration date furthest in the future.
+	cur := records[0]
+	for _, rec := range records {
+		if rec.Expiry.After(cur.Expiry) {
+			cur = rec
+		}
+	}
+	return []byte(cur.Body), nil, nil
 }
 
 // NewSourceFromFile reads the named file into an InMemorySource.
@@ -55,7 +132,7 @@ func (src InMemorySource) Response(request *ocsp.Request) (response []byte, pres
 // PEM without headers or whitespace).  Invalid responses are ignored.
 // This function pulls the entire file into an InMemorySource.
 func NewSourceFromFile(responseFile string) (Source, error) {
-	fileContents, err := ioutil.ReadFile(responseFile)
+	fileContents, err := os.ReadFile(responseFile)
 	if err != nil {
 		return nil, err
 	}
@@ -86,19 +163,81 @@ func NewSourceFromFile(responseFile string) (Source, error) {
 	return src, nil
 }
 
+// NewSourceFromDB reads the given database configuration file
+// and creates a database data source for use with the OCSP responder
+func NewSourceFromDB(DBConfigFile string) (Source, error) {
+	// Load DB from cofiguration file
+	db, err := dbconf.DBFromConfig(DBConfigFile)
+
+	if err != nil {
+		return nil, err
+	}
+	// Create accesor
+	accessor := sql.NewAccessor(db)
+	src := NewDBSource(accessor)
+
+	return src, nil
+}
+
+// Stats is a basic interface that allows users to record information
+// about returned responses
+type Stats interface {
+	ResponseStatus(ocsp.ResponseStatus)
+}
+
 // A Responder object provides the HTTP logic to expose a
 // Source of OCSP responses.
 type Responder struct {
 	Source Source
+	stats  Stats
 	clk    clock.Clock
 }
 
 // NewResponder instantiates a Responder with the give Source.
-func NewResponder(source Source) *Responder {
+func NewResponder(source Source, stats Stats) *Responder {
 	return &Responder{
 		Source: source,
-		clk:    clock.Default(),
+		stats:  stats,
+		clk:    clock.New(),
 	}
+}
+
+func overrideHeaders(response http.ResponseWriter, headers http.Header) {
+	for k, v := range headers {
+		if len(v) == 1 {
+			response.Header().Set(k, v[0])
+		} else if len(v) > 1 {
+			response.Header().Del(k)
+			for _, e := range v {
+				response.Header().Add(k, e)
+			}
+		}
+	}
+}
+
+type logEvent struct {
+	IP       string        `json:"ip,omitempty"`
+	UA       string        `json:"ua,omitempty"`
+	Method   string        `json:"method,omitempty"`
+	Path     string        `json:"path,omitempty"`
+	Body     string        `json:"body,omitempty"`
+	Received time.Time     `json:"received,omitempty"`
+	Took     time.Duration `json:"took,omitempty"`
+	Headers  http.Header   `json:"headers,omitempty"`
+
+	Serial         string `json:"serial,omitempty"`
+	IssuerKeyHash  string `json:"issuerKeyHash,omitempty"`
+	IssuerNameHash string `json:"issuerNameHash,omitempty"`
+	HashAlg        string `json:"hashAlg,omitempty"`
+}
+
+// hashToString contains mappings for the only hash functions
+// x/crypto/ocsp supports
+var hashToString = map[crypto.Hash]string{
+	crypto.SHA1:   "SHA1",
+	crypto.SHA256: "SHA256",
+	crypto.SHA384: "SHA384",
+	crypto.SHA512: "SHA512",
 }
 
 // A Responder can process both GET and POST requests.  The mapping
@@ -112,6 +251,25 @@ func NewResponder(source Source) *Responder {
 // strings of repeated '/' into a single '/', which will break the base64
 // encoding.
 func (rs Responder) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	le := logEvent{
+		IP:       request.RemoteAddr,
+		UA:       request.UserAgent(),
+		Method:   request.Method,
+		Path:     request.URL.Path,
+		Received: time.Now(),
+	}
+	defer func() {
+		le.Headers = response.Header()
+		le.Took = time.Since(le.Received)
+		jb, err := json.Marshal(le)
+		if err != nil {
+			// we log this error at the debug level as if we aren't at that level anyway
+			// we shouldn't really care about marshalling the log event object
+			log.Debugf("failed to marshal log event object: %s", err)
+			return
+		}
+		log.Debugf("Received request: %s", string(jb))
+	}()
 	// By default we set a 'max-age=0, no-cache' Cache-Control header, this
 	// is only returned to the client if a valid authorized OCSP response
 	// is not found or an error is returned. If a response if found the header
@@ -124,7 +282,7 @@ func (rs Responder) ServeHTTP(response http.ResponseWriter, request *http.Reques
 	case "GET":
 		base64Request, err := url.QueryUnescape(request.URL.Path)
 		if err != nil {
-			log.Infof("Error decoding URL: %s", request.URL.Path)
+			log.Debugf("Error decoding URL: %s", request.URL.Path)
 			response.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -138,14 +296,21 @@ func (rs Responder) ServeHTTP(response http.ResponseWriter, request *http.Reques
 				base64RequestBytes[i] = '+'
 			}
 		}
+		// In certain situations a UA may construct a request that has a double
+		// slash between the host name and the base64 request body due to naively
+		// constructing the request URL. In that case strip the leading slash
+		// so that we can still decode the request.
+		if len(base64RequestBytes) > 0 && base64RequestBytes[0] == '/' {
+			base64RequestBytes = base64RequestBytes[1:]
+		}
 		requestBody, err = base64.StdEncoding.DecodeString(string(base64RequestBytes))
 		if err != nil {
-			log.Infof("Error decoding base64 from URL: %s", base64Request)
+			log.Debugf("Error decoding base64 from URL: %s", string(base64RequestBytes))
 			response.WriteHeader(http.StatusBadRequest)
 			return
 		}
 	case "POST":
-		requestBody, err = ioutil.ReadAll(request.Body)
+		requestBody, err = io.ReadAll(request.Body)
 		if err != nil {
 			log.Errorf("Problem reading body of POST: %s", err)
 			response.WriteHeader(http.StatusBadRequest)
@@ -157,6 +322,9 @@ func (rs Responder) ServeHTTP(response http.ResponseWriter, request *http.Reques
 	}
 	b64Body := base64.StdEncoding.EncodeToString(requestBody)
 	log.Debugf("Received OCSP request: %s", b64Body)
+	if request.Method == http.MethodPost {
+		le.Body = b64Body
+	}
 
 	// All responses after this point will be OCSP.
 	// We could check for the content type of the request, but that
@@ -169,24 +337,49 @@ func (rs Responder) ServeHTTP(response http.ResponseWriter, request *http.Reques
 	//      should return unauthorizedRequest instead of malformed.
 	ocspRequest, err := ocsp.ParseRequest(requestBody)
 	if err != nil {
-		log.Infof("Error decoding request body: %s", b64Body)
+		log.Debugf("Error decoding request body: %s", b64Body)
 		response.WriteHeader(http.StatusBadRequest)
 		response.Write(malformedRequestErrorResponse)
+		if rs.stats != nil {
+			rs.stats.ResponseStatus(ocsp.Malformed)
+		}
 		return
 	}
+	le.Serial = fmt.Sprintf("%x", ocspRequest.SerialNumber.Bytes())
+	le.IssuerKeyHash = fmt.Sprintf("%x", ocspRequest.IssuerKeyHash)
+	le.IssuerNameHash = fmt.Sprintf("%x", ocspRequest.IssuerNameHash)
+	le.HashAlg = hashToString[ocspRequest.HashAlgorithm]
 
 	// Look up OCSP response from source
-	ocspResponse, found := rs.Source.Response(ocspRequest)
-	if !found {
-		log.Infof("No response found for request: %s", b64Body)
-		response.Write(unauthorizedErrorResponse)
+	ocspResponse, headers, err := rs.Source.Response(ocspRequest)
+	if err != nil {
+		if err == ErrNotFound {
+			log.Infof("No response found for request: serial %x, request body %s",
+				ocspRequest.SerialNumber, b64Body)
+			response.Write(unauthorizedErrorResponse)
+			if rs.stats != nil {
+				rs.stats.ResponseStatus(ocsp.Unauthorized)
+			}
+			return
+		}
+		log.Infof("Error retrieving response for request: serial %x, request body %s, error: %s",
+			ocspRequest.SerialNumber, b64Body, err)
+		response.WriteHeader(http.StatusInternalServerError)
+		response.Write(internalErrorErrorResponse)
+		if rs.stats != nil {
+			rs.stats.ResponseStatus(ocsp.InternalError)
+		}
 		return
 	}
 
 	parsedResponse, err := ocsp.ParseResponse(ocspResponse, nil)
 	if err != nil {
-		log.Errorf("Error parsing response: %s", err)
-		response.Write(unauthorizedErrorResponse)
+		log.Errorf("Error parsing response for serial %x: %s",
+			ocspRequest.SerialNumber, err)
+		response.Write(internalErrorErrorResponse)
+		if rs.stats != nil {
+			rs.stats.ResponseStatus(ocsp.InternalError)
+		}
 		return
 	}
 
@@ -212,6 +405,10 @@ func (rs Responder) ServeHTTP(response http.ResponseWriter, request *http.Reques
 	responseHash := sha256.Sum256(ocspResponse)
 	response.Header().Add("ETag", fmt.Sprintf("\"%X\"", responseHash))
 
+	if headers != nil {
+		overrideHeaders(response, headers)
+	}
+
 	// RFC 7232 says that a 304 response must contain the above
 	// headers if they would also be sent for a 200 for the same
 	// request, so we have to wait until here to do this
@@ -223,4 +420,7 @@ func (rs Responder) ServeHTTP(response http.ResponseWriter, request *http.Reques
 	}
 	response.WriteHeader(http.StatusOK)
 	response.Write(ocspResponse)
+	if rs.stats != nil {
+		rs.stats.ResponseStatus(ocsp.Success)
+	}
 }

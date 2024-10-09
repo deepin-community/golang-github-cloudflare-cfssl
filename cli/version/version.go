@@ -8,17 +8,9 @@ import (
 	"github.com/cloudflare/cfssl/cli"
 )
 
-// Version stores the semantic versioning information for CFSSL.
-var version = struct {
-	Major    int
-	Minor    int
-	Patch    int
-	Revision string
-}{1, 2, 0, "release"}
-
-func versionString() string {
-	return fmt.Sprintf("%d.%d.%d", version.Major, version.Minor, version.Patch)
-}
+var (
+	version = "dev"
+)
 
 // Usage text for 'cfssl version'
 var versionUsageText = `cfssl version -- print out the version of CF SSL
@@ -27,9 +19,14 @@ Usage of version:
 	cfssl version
 `
 
+// FormatVersion returns the formatted version string.
+func FormatVersion() string {
+	return fmt.Sprintf("Version: %s\nRuntime: %s\n", version, runtime.Version())
+}
+
 // The main functionality of 'cfssl version' is to print out the version info.
 func versionMain(args []string, c cli.Config) (err error) {
-	fmt.Printf("Version: %s\nRevision: %s\nRuntime: %s\n", versionString(), version.Revision, runtime.Version())
+	fmt.Printf("%s", FormatVersion())
 	return nil
 }
 

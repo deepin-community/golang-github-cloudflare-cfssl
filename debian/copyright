@@ -1,6 +1,7 @@
-Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: cfssl
 Source: https://github.com/cloudflare/cfssl
+Files-Excluded: vendor
 
 Files: *
 Copyright: 2014 Cloudflare

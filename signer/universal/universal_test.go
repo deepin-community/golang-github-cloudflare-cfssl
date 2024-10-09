@@ -2,10 +2,10 @@ package universal
 
 import (
 	"bytes"
-	"io/ioutil"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -111,7 +111,7 @@ var validMinimalUniversalConfig = `
     }
   },
   "remotes": {
-    "localhost": "127.0.0.1:1234"
+	"localhost": "http://127.0.0.1:1234"
   }
 }`
 
@@ -199,7 +199,7 @@ var validUniversalConfig = `
     }
   },
   "remotes": {
-    "localhost": "127.0.0.1:1234"
+	"localhost": "http://127.0.0.1:1234"
   }
 }`
 
@@ -300,7 +300,7 @@ func checkInfo(t *testing.T, s signer.Signer, name string, profile *config.Signi
 		t.Fatalf("Expected usage for profile %s to be %+v, got %+v", name, profile.Usage, resp.Usage)
 	}
 
-	caBytes, err := ioutil.ReadFile(testCaFile)
+	caBytes, err := os.ReadFile(testCaFile)
 	caBytes = bytes.TrimSpace(caBytes)
 	if err != nil {
 		t.Fatal("fail to read test CA cert:", err)
@@ -318,10 +318,10 @@ func TestUniversalRemoteAndLocalInfo(t *testing.T) {
 	defer closeTestServer(t, remoteServer)
 
 	universalConfig := testsuite.NewConfig(t, []byte(validMinimalUniversalConfig))
-	// override with test server address, ignore url prefix "http://"
+	// override with test server address
 	for name, profile := range universalConfig.Signing.Profiles {
 		if profile.RemoteServer != "" {
-			universalConfig.Signing.Profiles[name].RemoteServer = remoteServer.URL[7:]
+			universalConfig.Signing.Profiles[name].RemoteServer = remoteServer.URL
 		}
 	}
 	s := newTestUniversalSigner(t, universalConfig.Signing)
@@ -341,10 +341,10 @@ func TestUniversalMultipleRemoteAndLocalInfo(t *testing.T) {
 	defer closeTestServer(t, remoteServer)
 
 	universalConfig := testsuite.NewConfig(t, []byte(validUniversalConfig))
-	// override with test server address, ignore url prefix "http://"
+	// override with test server address
 	for name, profile := range universalConfig.Signing.Profiles {
 		if profile.RemoteServer != "" {
-			universalConfig.Signing.Profiles[name].RemoteServer = remoteServer.URL[7:]
+			universalConfig.Signing.Profiles[name].RemoteServer = remoteServer.URL
 		}
 	}
 	s := newTestUniversalSigner(t, universalConfig.Signing)
@@ -364,10 +364,10 @@ func TestUniversalRemoteAndLocalSign(t *testing.T) {
 	defer closeTestServer(t, remoteServer)
 
 	universalConfig := testsuite.NewConfig(t, []byte(validNoAuthUniversalConfig))
-	// override with test server address, ignore url prefix "http://"
+	// override with test server address
 	for name, profile := range universalConfig.Signing.Profiles {
 		if profile.RemoteServer != "" {
-			universalConfig.Signing.Profiles[name].RemoteServer = remoteServer.URL[7:]
+			universalConfig.Signing.Profiles[name].RemoteServer = remoteServer.URL
 		}
 	}
 	s := newTestUniversalSigner(t, universalConfig.Signing)
@@ -375,7 +375,7 @@ func TestUniversalRemoteAndLocalSign(t *testing.T) {
 	checkSign := func(name string, profile *config.SigningProfile) {
 		hosts := []string{"cloudflare.com"}
 		for _, test := range testsuite.CSRTests {
-			csr, err := ioutil.ReadFile(test.File)
+			csr, err := os.ReadFile(test.File)
 			if err != nil {
 				t.Fatalf("CSR loading error (%s): %v", name, err)
 			}

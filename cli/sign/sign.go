@@ -3,7 +3,8 @@ package sign
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"errors"
+	"os"
 
 	"github.com/cloudflare/cfssl/certdb/dbconf"
 	certsql "github.com/cloudflare/cfssl/certdb/sql"
@@ -121,9 +122,12 @@ func signerMain(args []string, c cli.Config) (err error) {
 		if err != nil {
 			return
 		}
+		if len(args) > 0 {
+			return errors.New("too many arguments are provided, please check with usage")
+		}
 
 		var subjectJSON []byte
-		subjectJSON, err = ioutil.ReadFile(subjectFile)
+		subjectJSON, err = os.ReadFile(subjectFile)
 		if err != nil {
 			return
 		}

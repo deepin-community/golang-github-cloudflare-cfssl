@@ -3,7 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -52,7 +52,7 @@ func post(t *testing.T, obj map[string]interface{}, ts *httptest.Server) (resp *
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err = ioutil.ReadAll(resp.Body)
+	body, err = io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func get(t *testing.T, ts *httptest.Server) (resp *http.Response, body []byte) {
 		t.Fatal(err)
 	}
 
-	body, err = ioutil.ReadAll(resp.Body)
+	body, err = io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestRigidHandle(t *testing.T) {
 	obj = map[string]interface{}{}
 	obj["critique"] = "it's OK"
 	obj["compliment"] = "it's not bad"
-	resp, body = post(t, obj, ts)
+	resp, _ = post(t, obj, ts)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("Test expected 400, have %d", resp.StatusCode)
@@ -128,14 +128,14 @@ func TestRigidHandle(t *testing.T) {
 
 	// reject empty review
 	obj = map[string]interface{}{}
-	resp, body = post(t, obj, ts)
+	resp, _ = post(t, obj, ts)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("Test expected 400, have %d", resp.StatusCode)
 	}
 
 	// reject GET
-	resp, body = get(t, ts)
+	resp, _ = get(t, ts)
 
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("Test expected 405, have %d", resp.StatusCode)
@@ -190,7 +190,7 @@ func TestCleverHandle(t *testing.T) {
 	obj = map[string]interface{}{}
 	obj["critique"] = "it's OK"
 	obj["compliment"] = "it's not bad"
-	resp, body = post(t, obj, ts)
+	_, body = post(t, obj, ts)
 
 	message = new(Response)
 	err = json.Unmarshal(body, message)
@@ -205,14 +205,14 @@ func TestCleverHandle(t *testing.T) {
 
 	// reject empty review
 	obj = map[string]interface{}{}
-	resp, body = post(t, obj, ts)
+	resp, _ = post(t, obj, ts)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("Test expected 400, have %d", resp.StatusCode)
 	}
 
 	// reject GET
-	resp, body = get(t, ts)
+	resp, _ = get(t, ts)
 
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("Test expected 405, have %d", resp.StatusCode)
