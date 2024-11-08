@@ -3,7 +3,7 @@ package info
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 
 	"github.com/cloudflare/cfssl/api"
@@ -34,11 +34,13 @@ func NewHandler(s signer.Signer) (http.Handler, error) {
 // a list containing information on each root certificate.
 func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) error {
 	req := new(info.Req)
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Warningf("failed to read request body: %v", err)
 		return errors.NewBadRequest(err)
 	}
+	r.Body.Close()
+
 	err = json.Unmarshal(body, req)
 	if err != nil {
 		log.Warningf("failed to unmarshal request: %v", err)
@@ -82,11 +84,13 @@ func NewMultiHandler(signers map[string]signer.Signer, defaultLabel string) (htt
 // the label is empty, the default label is used.
 func (h *MultiHandler) Handle(w http.ResponseWriter, r *http.Request) error {
 	req := new(info.Req)
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Warningf("failed to read request body: %v", err)
 		return errors.NewBadRequest(err)
 	}
+	r.Body.Close()
+
 	err = json.Unmarshal(body, req)
 	if err != nil {
 		log.Warningf("failed to unmarshal request: %v", err)

@@ -2,17 +2,18 @@
 package ocsp
 
 import (
-	"net/http"
-
+	"crypto"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"net/http"
+	"time"
+
 	"github.com/cloudflare/cfssl/api"
 	"github.com/cloudflare/cfssl/errors"
 	"github.com/cloudflare/cfssl/helpers"
 	"github.com/cloudflare/cfssl/log"
 	"github.com/cloudflare/cfssl/ocsp"
-	"io/ioutil"
-	"time"
 )
 
 // A Handler accepts requests with a certficate parameter
@@ -38,6 +39,15 @@ type jsonSignRequest struct {
 	Status      string `json:"status"`
 	Reason      int    `json:"reason,omitempty"`
 	RevokedAt   string `json:"revoked_at,omitempty"`
+	IssuerHash  string `json:"issuer_hash,omitempty"`
+}
+
+var nameToHash = map[string]crypto.Hash{
+	"MD5":    crypto.MD5,
+	"SHA1":   crypto.SHA1,
+	"SHA256": crypto.SHA256,
+	"SHA384": crypto.SHA384,
+	"SHA512": crypto.SHA512,
 }
 
 // Handle responds to requests for a ocsp signature. It creates and signs
@@ -45,7 +55,7 @@ type jsonSignRequest struct {
 // is revoked then it also adds reason and revoked_at. The response is
 // base64 encoded.
 func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) error {
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return err
 	}
@@ -82,6 +92,13 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) error {
 				return errors.NewBadRequestString("Malformed revocation time")
 			}
 		}
+	}
+	if req.IssuerHash != "" {
+		issuerHash, ok := nameToHash[req.IssuerHash]
+		if !ok {
+			return errors.NewBadRequestString("Unsupported hash algorithm in request")
+		}
+		signReq.IssuerHash = issuerHash
 	}
 
 	resp, err := h.signer.Sign(signReq)

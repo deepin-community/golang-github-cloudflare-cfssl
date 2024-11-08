@@ -6,13 +6,14 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	goerr "errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -32,6 +33,9 @@ import (
 // When unspecified, downloaded intermediates are not saved.
 var IntermediateStash string
 
+// HTTPClient is an instance of http.Client that will be used for all HTTP requests.
+var HTTPClient = http.DefaultClient
+
 // BundleFlavor is named optimization strategy on certificate chain selection when bundling.
 type BundleFlavor string
 
@@ -44,7 +48,7 @@ const (
 	// by the most platforms.
 	Ubiquitous BundleFlavor = "ubiquitous"
 
-	// Force means the bundler only verfiies the input as a valid bundle, not optimization is done.
+	// Force means the bundler only verifies the input as a valid bundle, not optimization is done.
 	Force BundleFlavor = "force"
 )
 
@@ -63,18 +67,40 @@ type Bundler struct {
 	RootPool         *x509.CertPool
 	IntermediatePool *x509.CertPool
 	KnownIssuers     map[string]bool
+	opts             options
+}
+
+type options struct {
+	keyUsages []x509.ExtKeyUsage
+}
+
+var defaultOptions = options{
+	keyUsages: []x509.ExtKeyUsage{
+		x509.ExtKeyUsageAny,
+	},
+}
+
+// An Option sets options such as allowed key usages, etc.
+type Option func(*options)
+
+// WithKeyUsages lets you set which Extended Key Usage values are acceptable. By
+// default x509.ExtKeyUsageAny will be used.
+func WithKeyUsages(usages ...x509.ExtKeyUsage) Option {
+	return func(o *options) {
+		o.keyUsages = usages
+	}
 }
 
 // NewBundler creates a new Bundler from the files passed in; these
 // files should contain a list of valid root certificates and a list
 // of valid intermediate certificates, respectively.
-func NewBundler(caBundleFile, intBundleFile string) (*Bundler, error) {
+func NewBundler(caBundleFile, intBundleFile string, opt ...Option) (*Bundler, error) {
 	var caBundle, intBundle []byte
 	var err error
 
 	if caBundleFile != "" {
 		log.Debug("Loading CA bundle: ", caBundleFile)
-		caBundle, err = ioutil.ReadFile(caBundleFile)
+		caBundle, err = os.ReadFile(caBundleFile)
 		if err != nil {
 			log.Errorf("root bundle failed to load: %v", err)
 			return nil, errors.Wrap(errors.RootError, errors.ReadFailed, err)
@@ -83,7 +109,7 @@ func NewBundler(caBundleFile, intBundleFile string) (*Bundler, error) {
 
 	if intBundleFile != "" {
 		log.Debug("Loading Intermediate bundle: ", intBundleFile)
-		intBundle, err = ioutil.ReadFile(intBundleFile)
+		intBundle, err = os.ReadFile(intBundleFile)
 		if err != nil {
 			log.Errorf("intermediate bundle failed to load: %v", err)
 			return nil, errors.Wrap(errors.IntermediatesError, errors.ReadFailed, err)
@@ -103,14 +129,19 @@ func NewBundler(caBundleFile, intBundleFile string) (*Bundler, error) {
 		}
 	}
 
-	return NewBundlerFromPEM(caBundle, intBundle)
+	return NewBundlerFromPEM(caBundle, intBundle, opt...)
 
 }
 
 // NewBundlerFromPEM creates a new Bundler from PEM-encoded root certificates and
 // intermediate certificates.
 // If caBundlePEM is nil, the resulting Bundler can only do "Force" bundle.
-func NewBundlerFromPEM(caBundlePEM, intBundlePEM []byte) (*Bundler, error) {
+func NewBundlerFromPEM(caBundlePEM, intBundlePEM []byte, opt ...Option) (*Bundler, error) {
+	opts := defaultOptions
+	for _, o := range opt {
+		o(&opts)
+	}
+
 	log.Debug("parsing root certificates from PEM")
 	roots, err := helpers.ParseCertificatesPEM(caBundlePEM)
 	if err != nil {
@@ -128,6 +159,7 @@ func NewBundlerFromPEM(caBundlePEM, intBundlePEM []byte) (*Bundler, error) {
 	b := &Bundler{
 		KnownIssuers:     map[string]bool{},
 		IntermediatePool: x509.NewCertPool(),
+		opts:             opts,
 	}
 
 	log.Debug("building certificate pools")
@@ -159,11 +191,7 @@ func (b *Bundler) VerifyOptions() x509.VerifyOptions {
 	return x509.VerifyOptions{
 		Roots:         b.RootPool,
 		Intermediates: b.IntermediatePool,
-		KeyUsages: []x509.ExtKeyUsage{
-			x509.ExtKeyUsageServerAuth,
-			x509.ExtKeyUsageMicrosoftServerGatedCrypto,
-			x509.ExtKeyUsageNetscapeServerGatedCrypto,
-		},
+		KeyUsages:     b.opts.keyUsages,
 	}
 }
 
@@ -172,7 +200,7 @@ func (b *Bundler) VerifyOptions() x509.VerifyOptions {
 // and returns the bundle built from that key and the certificate(s).
 func (b *Bundler) BundleFromFile(bundleFile, keyFile string, flavor BundleFlavor, password string) (*Bundle, error) {
 	log.Debug("Loading Certificate: ", bundleFile)
-	certsRaw, err := ioutil.ReadFile(bundleFile)
+	certsRaw, err := os.ReadFile(bundleFile)
 	if err != nil {
 		return nil, errors.Wrap(errors.CertificateError, errors.ReadFailed, err)
 	}
@@ -181,7 +209,7 @@ func (b *Bundler) BundleFromFile(bundleFile, keyFile string, flavor BundleFlavor
 	// Load private key PEM only if a file is given
 	if keyFile != "" {
 		log.Debug("Loading private key: ", keyFile)
-		keyPEM, err = ioutil.ReadFile(keyFile)
+		keyPEM, err = os.ReadFile(keyFile)
 		if err != nil {
 			log.Debugf("failed to read private key: ", err)
 			return nil, errors.Wrap(errors.PrivateKeyError, errors.ReadFailed, err)
@@ -309,7 +337,7 @@ type fetchedIntermediate struct {
 func fetchRemoteCertificate(certURL string) (fi *fetchedIntermediate, err error) {
 	log.Debugf("fetching remote certificate: %s", certURL)
 	var resp *http.Response
-	resp, err = http.Get(certURL)
+	resp, err = HTTPClient.Get(certURL)
 	if err != nil {
 		log.Debugf("failed HTTP get: %v", err)
 		return
@@ -317,7 +345,7 @@ func fetchRemoteCertificate(certURL string) (fi *fetchedIntermediate, err error)
 
 	defer resp.Body.Close()
 	var certData []byte
-	certData, err = ioutil.ReadAll(resp.Body)
+	certData, err = io.ReadAll(resp.Body)
 	if err != nil {
 		log.Debugf("failed to read response body: %v", err)
 		return
@@ -371,10 +399,7 @@ func isSelfSigned(cert *x509.Certificate) bool {
 }
 
 func isChainRootNode(cert *x509.Certificate) bool {
-	if isSelfSigned(cert) {
-		return true
-	}
-	return false
+	return isSelfSigned(cert)
 }
 
 func (b *Bundler) verifyChain(chain []*fetchedIntermediate) bool {
@@ -415,7 +440,7 @@ func (b *Bundler) verifyChain(chain []*fetchedIntermediate) bool {
 
 			log.Debugf("write intermediate to stash directory: %s", fileName)
 			// If the write fails, verification should not fail.
-			err = ioutil.WriteFile(fileName, pem.EncodeToMemory(&block), 0644)
+			err = os.WriteFile(fileName, pem.EncodeToMemory(&block), 0644)
 			if err != nil {
 				log.Errorf("failed to write new intermediate: %v", err)
 			} else {
@@ -446,7 +471,7 @@ func constructCertFileName(cert *x509.Certificate) string {
 // intermediate pool, the certificate is saved to file and added to
 // the list of intermediates to be used for verification. This will
 // not add any new certificates to the root pool; if the ultimate
-// issuer is not trusted, fetching the certicate here will not change
+// issuer is not trusted, fetching the certificate here will not change
 // that.
 func (b *Bundler) fetchIntermediates(certs []*x509.Certificate) (err error) {
 	if IntermediateStash != "" {
@@ -528,7 +553,7 @@ func (b *Bundler) fetchIntermediates(certs []*x509.Certificate) (err error) {
 
 // Bundle takes an X509 certificate (already in the
 // Certificate structure), a private key as crypto.Signer in one of the appropriate
-// formats (i.e. *rsa.PrivateKey or *ecdsa.PrivateKey, or even a opaque key), using them to
+// formats (i.e. *rsa.PrivateKey, *ecdsa.PrivateKey or ed25519.PrivateKey, or even a opaque key), using them to
 // build a certificate bundle.
 func (b *Bundler) Bundle(certs []*x509.Certificate, key crypto.Signer, flavor BundleFlavor) (*Bundle, error) {
 	log.Infof("bundling certificate for %+v", certs[0].Subject)
@@ -549,7 +574,6 @@ func (b *Bundler) Bundle(certs []*x509.Certificate, key crypto.Signer, flavor Bu
 	if key != nil {
 		switch {
 		case cert.PublicKeyAlgorithm == x509.RSA:
-
 			var rsaPublicKey *rsa.PublicKey
 			if rsaPublicKey, ok = key.Public().(*rsa.PublicKey); !ok {
 				return nil, errors.New(errors.PrivateKeyError, errors.KeyMismatch)
@@ -565,15 +589,24 @@ func (b *Bundler) Bundle(certs []*x509.Certificate, key crypto.Signer, flavor Bu
 			if cert.PublicKey.(*ecdsa.PublicKey).X.Cmp(ecdsaPublicKey.X) != 0 {
 				return nil, errors.New(errors.PrivateKeyError, errors.KeyMismatch)
 			}
+		case cert.PublicKeyAlgorithm == x509.Ed25519:
+			var ed25519PublicKey ed25519.PublicKey
+			if ed25519PublicKey, ok = key.Public().(ed25519.PublicKey); !ok {
+				return nil, errors.New(errors.PrivateKeyError, errors.KeyMismatch)
+			}
+			if !(bytes.Equal(cert.PublicKey.(ed25519.PublicKey), ed25519PublicKey)) {
+				return nil, errors.New(errors.PrivateKeyError, errors.KeyMismatch)
+			}
 		default:
-			return nil, errors.New(errors.PrivateKeyError, errors.NotRSAOrECC)
+			return nil, errors.New(errors.PrivateKeyError, errors.NotRSAOrECCOrEd25519)
 		}
 	} else {
 		switch {
 		case cert.PublicKeyAlgorithm == x509.RSA:
 		case cert.PublicKeyAlgorithm == x509.ECDSA:
+		case cert.PublicKeyAlgorithm == x509.Ed25519:
 		default:
-			return nil, errors.New(errors.PrivateKeyError, errors.NotRSAOrECC)
+			return nil, errors.New(errors.PrivateKeyError, errors.NotRSAOrECCOrEd25519)
 		}
 	}
 
@@ -611,9 +644,9 @@ func (b *Bundler) Bundle(certs []*x509.Certificate, key crypto.Signer, flavor Bu
 			}
 
 			log.Debugf("searching for intermediates via AIA issuer")
-			err = b.fetchIntermediates(certs)
-			if err != nil {
-				log.Debugf("search failed: %v", err)
+			searchErr := b.fetchIntermediates(certs)
+			if searchErr != nil {
+				log.Debugf("search failed: %v", searchErr)
 				return nil, errors.Wrap(errors.CertificateError, errors.VerifyFailed, err)
 			}
 
@@ -645,7 +678,6 @@ func (b *Bundler) Bundle(certs []*x509.Certificate, key crypto.Signer, flavor Bu
 	var messages []string
 	// Check if bundle is expiring.
 	expiringCerts := checkExpiringCerts(bundle.Chain)
-	bundle.Expires = helpers.ExpiryTime(bundle.Chain)
 	if len(expiringCerts) > 0 {
 		statusCode |= errors.BundleExpiringBit
 		messages = append(messages, expirationWarning(expiringCerts))
@@ -702,6 +734,8 @@ func (b *Bundler) Bundle(certs []*x509.Certificate, key crypto.Signer, flavor Bu
 	}
 
 	bundle.Status.IsRebundled = diff(bundle.Chain, certs)
+	bundle.Expires = helpers.ExpiryTime(bundle.Chain)
+	bundle.LeafExpires = bundle.Chain[0].NotAfter
 
 	log.Debugf("bundle complete")
 	return bundle, nil

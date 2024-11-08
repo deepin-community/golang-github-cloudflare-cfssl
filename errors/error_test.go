@@ -87,7 +87,7 @@ func TestNew(t *testing.T) {
 	if code != 2100 {
 		t.Fatal("Improper error code")
 	}
-	code = New(PrivateKeyError, NotRSAOrECC).ErrorCode
+	code = New(PrivateKeyError, NotRSAOrECCOrEd25519).ErrorCode
 	if code != 2200 {
 		t.Fatal("Improper error code")
 	}
@@ -240,7 +240,8 @@ func TestWrap(t *testing.T) {
 	if err.ErrorCode != int(CertificateError)+int(VerifyFailed)+certificateInvalid+int(x509.Expired) {
 		t.Fatal("Error code construction failed.")
 	}
-	if err.Message != "x509: certificate has expired or is not yet valid" {
+	errorString := "x509: certificate has expired or is not yet valid:"
+	if err.Message[:49] != errorString[:49] {
 		t.Fatal("Error message construction failed.")
 	}
 

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"strconv"
@@ -284,10 +283,15 @@ func SignCertificate(request csr.CertificateRequest, signerCert, signerKey []byt
 		tempCSRFile,
 	)
 	CLIOutput, err = command.CombinedOutput()
+	if err != nil {
+		return nil, nil, fmt.Errorf("%v - CLI output: %s", err, string(CLIOutput))
+	}
+
 	err = checkCLIOutput(CLIOutput)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%v - CLI output: %s", err, string(CLIOutput))
 	}
+
 	encodedCert, err = cleanCLIOutput(CLIOutput, "cert")
 	if err != nil {
 		return nil, nil, err
@@ -319,7 +323,7 @@ func createTempFile(data []byte) (fileName string, err error) {
 	}
 
 	readWritePermissions := os.FileMode(0664)
-	err = ioutil.WriteFile(tempFileName, data, readWritePermissions)
+	err = os.WriteFile(tempFileName, data, readWritePermissions)
 	if err != nil {
 		return "", err
 	}
@@ -348,7 +352,7 @@ func cleanCLIOutput(CLIOutput []byte, item string) (cleanedOutput []byte, err er
 	eligibleSearchIndex := strings.Index(outputString, "{")
 	outputString = outputString[eligibleSearchIndex:]
 	// Make sure the item is present in the output.
-	if strings.Index(outputString, itemString) == -1 {
+	if !strings.Contains(outputString, itemString) {
 		return nil, errors.New("Item " + item + " not found in CLI Output")
 	}
 	// We add 2 for the [:"] that follows the item

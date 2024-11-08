@@ -16,6 +16,8 @@ Optional parameters:
     the CSR, useful when interacting with cfssl server that stands
     in front of a remote multi-root CA signer
     * profile: a string specifying the signing profile for the signer
+    * bundle: a boolean specifying whether to include an "optimal"
+    certificate bundle along with the certificate
 
 Result:
 
@@ -25,7 +27,9 @@ Result:
     * certificate_request: a PEM-encoded certificate request
     * certificate: a PEM-encoded certificate, signed by the server
     * sums: a JSON object holding both MD5 and SHA1 digests for the certificate
-    request and the certificate
+    request and the certificate; note that this is the digest of the DER
+    contents of the certificate, not the PEM contents
+    * bundle: See the result of endpoint_bundle.txt (only included if the bundle parameter was set)
 
 Example:
 
@@ -46,11 +50,13 @@ Example:
         "sums": {
             "certificate": {
                 "md5": "E9308D1892F1B77E6721EA2F79C026BE",
-                "sha-1": "4640E6DEC2C40B74F46C409C1D31928EE0073D25"
+                "sha-1": "4640E6DEC2C40B74F46C409C1D31928EE0073D25",
+                "sha-256": "8812010B59EB8C00CDD9292078717216B131A710703F18A4DFB94AC166F507DF"
             },
             "certificate_request": {
                 "md5": "AA924136405006E36CEE39FED9CBA5D7",
-                "sha-1": "DF955A43DF669D38E07BF0479789D13881DC9024"
+                "sha-1": "DF955A43DF669D38E07BF0479789D13881DC9024",
+                "sha-256": "C7600A68BDB689346E2E4438A374606DFC3FFD3B6B9722E0A8CB32AA88FBA686"
             }
         }
     },

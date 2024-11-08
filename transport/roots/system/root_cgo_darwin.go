@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build darwin && cgo && !arm && !arm64 && !ios
 // +build darwin,cgo,!arm,!arm64,!ios
 
 package system
@@ -70,7 +71,7 @@ func initSystemRoots() []*x509.Certificate {
 	var roots []*x509.Certificate
 
 	var data C.CFDataRef
-	data = nil
+	setNilCFRef(&data)
 	err := C.FetchPEMRootsCFSSLTransport(&data)
 	if err == -1 {
 		return nil

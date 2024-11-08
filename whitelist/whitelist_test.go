@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io/ioutil"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"testing"
@@ -154,7 +155,7 @@ var proceed = make(chan struct{}, 0)
 func setupTestServer(t *testing.T, wl ACL) {
 	ln, err := net.Listen("tcp", "127.0.0.1:4141")
 	if err != nil {
-		t.Fatalf("%v", err)
+		log.Fatalf("%v", err)
 	}
 	proceed <- struct{}{}
 	for {
@@ -166,7 +167,7 @@ func setupTestServer(t *testing.T, wl ACL) {
 		default:
 			conn, err := ln.Accept()
 			if err != nil {
-				t.Fatalf("%v", err)
+				log.Fatalf("%v", err)
 			}
 			go handleTestConnection(conn, wl, t)
 		}
@@ -177,7 +178,7 @@ func handleTestConnection(conn net.Conn, wl ACL, t *testing.T) {
 	defer conn.Close()
 	ip, err := NetConnLookup(conn)
 	if err != nil {
-		t.Fatalf("%v", err)
+		log.Fatalf("%v", err)
 	}
 
 	if wl.Permitted(ip) {
@@ -198,7 +199,7 @@ func TestNetConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	body, err := ioutil.ReadAll(conn)
+	body, err := io.ReadAll(conn)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -212,7 +213,7 @@ func TestNetConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	body, err = ioutil.ReadAll(conn)
+	body, err = io.ReadAll(conn)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}

@@ -35,7 +35,7 @@ Arguments:
 Flags:
 `
 
-var gencertFlags = []string{"initca", "remote", "ca", "ca-key", "config", "hostname", "profile", "label"}
+var gencertFlags = []string{"initca", "remote", "ca", "ca-key", "config", "cn", "hostname", "profile", "label"}
 
 func gencertMain(args []string, c cli.Config) error {
 	if c.RenewCA {
@@ -54,13 +54,17 @@ func gencertMain(args []string, c cli.Config) error {
 		return err
 	}
 
+	if len(args) > 0 {
+		return errors.New("only one argument is accepted, please check with usage")
+	}
+
 	csrJSONFileBytes, err := cli.ReadStdin(csrJSONFile)
 	if err != nil {
 		return err
 	}
 
 	req := csr.CertificateRequest{
-		KeyRequest: csr.NewBasicKeyRequest(),
+		KeyRequest: csr.NewKeyRequest(),
 	}
 	err = json.Unmarshal(csrJSONFileBytes, &req)
 	if err != nil {

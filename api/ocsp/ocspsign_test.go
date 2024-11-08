@@ -4,17 +4,18 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/cloudflare/cfssl/api"
-	"github.com/cloudflare/cfssl/ocsp"
-	goocsp "golang.org/x/crypto/ocsp"
-
 	"github.com/cloudflare/cfssl/helpers"
+	"github.com/cloudflare/cfssl/ocsp"
+
+	goocsp "golang.org/x/crypto/ocsp"
 )
 
 const (
@@ -43,13 +44,13 @@ func newSignServer(t *testing.T) *httptest.Server {
 	return ts
 }
 
-func testSignFile(t *testing.T, certFile, status string, reason int, revokedAt string) (resp *http.Response, body []byte) {
+func testSignFile(t *testing.T, certFile, status string, reason int, revokedAt string, hash string) (resp *http.Response, body []byte) {
 	ts := newSignServer(t)
 	defer ts.Close()
 
 	obj := map[string]interface{}{}
 	if certFile != "" {
-		c, err := ioutil.ReadFile(certFile)
+		c, err := os.ReadFile(certFile)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,6 +63,7 @@ func testSignFile(t *testing.T, certFile, status string, reason int, revokedAt s
 	if revokedAt != "" {
 		obj["revoked_at"] = revokedAt
 	}
+	obj["issuer_hash"] = hash
 
 	blob, err := json.Marshal(obj)
 	if err != nil {
@@ -72,7 +74,7 @@ func testSignFile(t *testing.T, certFile, status string, reason int, revokedAt s
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err = ioutil.ReadAll(resp.Body)
+	body, err = io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +89,7 @@ type signTest struct {
 	ExpectedHTTPStatus int
 	ExpectedSuccess    bool
 	ExpectedErrorCode  int
+	IssuerHash         string
 }
 
 var signTests = []signTest{
@@ -142,11 +145,25 @@ var signTests = []signTest{
 		ExpectedSuccess:    false,
 		ExpectedErrorCode:  8200,
 	},
+	{
+		CertificateFile:    testCertFile,
+		IssuerHash:         "SHA256",
+		ExpectedHTTPStatus: http.StatusOK,
+		ExpectedSuccess:    true,
+		ExpectedErrorCode:  0,
+	},
+	{
+		CertificateFile:    testCertFile,
+		IssuerHash:         "MD4",
+		ExpectedHTTPStatus: http.StatusBadRequest,
+		ExpectedSuccess:    false,
+		ExpectedErrorCode:  http.StatusBadRequest,
+	},
 }
 
 func TestSign(t *testing.T) {
 	for i, test := range signTests {
-		resp, body := testSignFile(t, test.CertificateFile, test.Status, test.Reason, test.RevokedAt)
+		resp, body := testSignFile(t, test.CertificateFile, test.Status, test.Reason, test.RevokedAt, test.IssuerHash)
 		if resp.StatusCode != test.ExpectedHTTPStatus {
 			t.Logf("Test %d: expected: %d, have %d", i, test.ExpectedHTTPStatus, resp.StatusCode)
 			t.Fatal(resp.Status, test.ExpectedHTTPStatus, string(body))
@@ -194,7 +211,7 @@ func TestSign(t *testing.T) {
 			t.Fatal(resp.Status, test.ExpectedHTTPStatus, b64Resp)
 		}
 
-		//should default to good
+		// should default to good
 		if test.Status == "" {
 			test.Status = "good"
 		}

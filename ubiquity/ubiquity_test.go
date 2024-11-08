@@ -3,7 +3,7 @@ package ubiquity
 import (
 	"crypto/x509"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"testing"
 	"time"
 
@@ -24,7 +24,7 @@ const (
 var rsa1024Cert, rsa2048Cert, rsa3072Cert, rsa4096Cert, ecdsa256Cert, ecdsa384Cert, ecdsa521Cert *x509.Certificate
 
 func readCert(filename string) *x509.Certificate {
-	bytes, _ := ioutil.ReadFile(filename)
+	bytes, _ := os.ReadFile(filename)
 	cert, _ := helpers.ParseCertificatePEM(bytes)
 	return cert
 }
@@ -240,7 +240,7 @@ func TestPlatformKeyStoreUbiquity(t *testing.T) {
 	// load Platforms with test data
 	// "Macrosoft" has all three certs.
 	// "Godzilla" has two certs, cert1 and cert2.
-	// "Pinapple" has cert1.
+	// "Pineapple" has cert1.
 	// "Colorful" has no key store data, default to trust any cert
 	// All platforms support the same crypto suite.
 	platformA := Platform{Name: "MacroSoft", Weight: 100, HashAlgo: "SHA2", KeyAlgo: "ECDSA256", KeyStoreFile: "testdata/macrosoft.pem"}
@@ -548,7 +548,7 @@ func TestSHA1DeprecationMessages(t *testing.T) {
 	chain2 := []*x509.Certificate{cert1, cert1}
 	chain3 := []*x509.Certificate{cert2, cert1, cert1}
 	chain4 := []*x509.Certificate{cert2, cert2, cert1}
-	messages := []string{}
+	var messages []string
 
 	Jan1st2014 := time.Date(2014, time.January, 1, 0, 0, 0, 0, time.UTC)
 	Jan1st2100 := time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC)
