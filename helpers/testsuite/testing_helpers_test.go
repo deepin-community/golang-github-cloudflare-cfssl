@@ -3,7 +3,6 @@ package testsuite
 import (
 	"crypto/x509"
 	"encoding/json"
-	"io/ioutil"
 	"math"
 	"math/rand"
 	"os"
@@ -26,7 +25,7 @@ const (
 )
 
 var (
-	keyRequest = csr.BasicKeyRequest{
+	keyRequest = csr.KeyRequest{
 		A: "rsa",
 		S: 2048,
 	}
@@ -105,7 +104,7 @@ func TestStartCFSSLServer(t *testing.T) {
 	}
 
 	// Now we make the request and check the output.
-	remoteServerString := "-remote=" + addressToTest + ":" + strconv.Itoa(portToTest)
+	remoteServerString := "-remote=" + "http://" + addressToTest + ":" + strconv.Itoa(portToTest)
 	command := exec.Command(
 		"cfssl", "gencert", remoteServerString, "-hostname="+baseRequest.CN, tempFile)
 	CLIOutput, err := command.CombinedOutput()
@@ -154,7 +153,7 @@ func TestCreateCertificateChain(t *testing.T) {
 	// the same request data.
 
 	CLIOutputFile := preMadeOutput
-	CLIOutput, err := ioutil.ReadFile(CLIOutputFile)
+	CLIOutput, err := os.ReadFile(CLIOutputFile)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -214,7 +213,7 @@ func TestCreateCertificateChain(t *testing.T) {
 		org := randomElement(orgGrabBag)
 		orgUnit := randomElement(orgUnitGrabBag)
 
-		requests[i].CN = cn + "." + tld
+		requests[i].CN = cn + tld
 		requests[i].Names = []csr.Name{
 			{C: country,
 				ST: state,
@@ -291,7 +290,7 @@ func TestCreateSelfSignedCert(t *testing.T) {
 	// and is called ca_csr.json.
 
 	CLIOutputFile := preMadeOutput
-	CLIOutput, err := ioutil.ReadFile(CLIOutputFile)
+	CLIOutput, err := os.ReadFile(CLIOutputFile)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

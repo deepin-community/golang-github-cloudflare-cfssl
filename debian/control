@@ -1,41 +1,45 @@
 Source: golang-github-cloudflare-cfssl
 Section: devel
-Priority: extra
+Priority: optional
 Maintainer: Debian Go Packaging Team <pkg-go-maintainers@lists.alioth.debian.org>
 Uploaders: Tim Potter <tpot@hpe.com>
-Build-Depends: debhelper (>= 9),
-               dh-golang,
+Build-Depends: debhelper-compat (= 12),
                dh-exec,
+               dh-golang,
+               golang-any,
+               golang-github-cloudflare-backoff-dev,
                golang-github-cloudflare-go-metrics-dev,
                golang-github-cloudflare-redoctober-dev,
                golang-github-geertjohan-go.rice-dev,
-               golang-github-google-certificate-transparency-dev,
+               golang-github-google-certificate-transparency-dev (>= 1.1.7),
                golang-github-jmhodges-clock-dev,
                golang-github-jmoiron-sqlx-dev,
                golang-github-juju-ratelimit-dev,
                golang-github-kisielk-sqlstruct-dev,
                golang-github-kisom-goutils-dev,
                golang-github-mattn-go-sqlite3-dev,
-               golang-any
+               golang-github-zmap-zlint-dev
 Standards-Version: 3.9.8
 Homepage: https://github.com/cloudflare/cfssl
-Vcs-Browser: https://anonscm.debian.org/cgit/pkg-go/packages/golang-github-cloudflare-cfssl.git
-Vcs-Git: https://anonscm.debian.org/git/pkg-go/packages/golang-github-cloudflare-cfssl.git
+Vcs-Browser: https://salsa.debian.org/go-team/packages/golang-github-cloudflare-cfssl
+Vcs-Git: https://salsa.debian.org/go-team/packages/golang-github-cloudflare-cfssl.git
 XS-Go-Import-Path: github.com/cloudflare/cfssl
 
 Package: golang-github-cloudflare-cfssl-dev
 Architecture: all
-Depends: golang-github-cloudflare-go-metrics-dev,
+Depends: golang-any,
+         golang-github-cloudflare-backoff-dev,
+         golang-github-cloudflare-go-metrics-dev,
          golang-github-cloudflare-redoctober-dev,
          golang-github-geertjohan-go.rice-dev,
-         golang-github-google-certificate-transparency-dev,
+         golang-github-google-certificate-transparency-dev (>= 1.1.7),
          golang-github-jmhodges-clock-dev,
          golang-github-jmoiron-sqlx-dev,
          golang-github-juju-ratelimit-dev,
          golang-github-kisielk-sqlstruct-dev,
          golang-github-kisom-goutils-dev,
          golang-github-mattn-go-sqlite3-dev,
-         golang-any,
+         golang-github-zmap-zlint-dev,
          ${misc:Depends},
          ${shlibs:Depends}
 Description: CloudFlare's PKI and TLS toolkit
@@ -50,8 +54,7 @@ Description: CloudFlare's PKI and TLS toolkit
 Package: golang-cfssl
 Architecture: any
 Built-Using: ${misc:Built-Using}
-Depends: ${shlibs:Depends},
-         ${misc:Depends}
+Depends: ${misc:Depends}, ${shlibs:Depends}
 Description: CloudFlare's PKI and TLS toolkit
  CFSSL is CloudFlare's PKI/TLS swiss army knife. It is both a command
  line tool and an HTTP API server for signing, verifying, and bundling

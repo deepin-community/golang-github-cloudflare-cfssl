@@ -1,6 +1,4 @@
-# uscan(1) configuration file.
-version=3
-
- https://github.com/cloudflare/cfssl/releases \
- .*/archive/v?(\d[\d\.]+)\.tar\.gz
- 
+version=4
+opts="repack,repacksuffix=+ds1,filenamemangle=s%.*/@ANY_VERSION@%@PACKAGE@-$1.tar.gz%,searchmode=plain" \
+    https://api.github.com/repos/cloudflare/cfssl/releases?per_page=100 \
+    https://api.github.com/repos/cloudflare/cfssl/tarball/@ANY_VERSION@

@@ -5,10 +5,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io/ioutil"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -39,7 +39,7 @@ var validMinimalRemoteConfig = `
 		}
 	},
 	"remotes": {
-		"localhost": "127.0.0.1:80"
+		"localhost": "http://127.0.0.1:80"
 	}
 }`
 
@@ -58,7 +58,7 @@ var validMinimalAuthRemoteConfig = `
 		}
 	},
 	"remotes": {
-		"localhost": "127.0.0.1:80"
+		"localhost": "http://127.0.0.1:80"
 	}
 }`
 
@@ -85,8 +85,8 @@ func TestRemoteInfo(t *testing.T) {
 	defer closeTestServer(t, remoteServer)
 
 	remoteConfig := testsuite.NewConfig(t, []byte(validMinimalRemoteConfig))
-	// override with test server address, ignore url prefix "http://"
-	remoteConfig.Signing.OverrideRemotes(remoteServer.URL[7:])
+	// override with test server address
+	remoteConfig.Signing.OverrideRemotes(remoteServer.URL)
 	verifyRemoteInfo(t, remoteConfig)
 }
 
@@ -99,6 +99,7 @@ func TestRemoteMutualTLSInfo(t *testing.T) {
 }
 
 func remoteTLSInfo(t *testing.T, isMutual bool) {
+	t.Skip("expired cert https://github.com/cloudflare/cfssl/issues/1237")
 	certPool, err := helpers.LoadPEMCertPool(testCaFile)
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +113,7 @@ func remoteTLSInfo(t *testing.T, isMutual bool) {
 
 	remoteConfig := testsuite.NewConfig(t, []byte(validMinimalRemoteConfig))
 	// override with full server URL to get https in protocol"
+	t.Log("remote is:", remoteServer.URL)
 	remoteConfig.Signing.OverrideRemotes(remoteServer.URL)
 	remoteConfig.Signing.SetRemoteCAs(certPool)
 	if isMutual {
@@ -128,7 +130,7 @@ func verifyRemoteInfo(t *testing.T, remoteConfig *config.Config) {
 		t.Fatal("remote info failed:", err)
 	}
 
-	caBytes, err := ioutil.ReadFile(testCaFile)
+	caBytes, err := os.ReadFile(testCaFile)
 	caBytes = bytes.TrimSpace(caBytes)
 	if err != nil {
 		t.Fatal("fail to read test CA cert:", err)
@@ -144,8 +146,8 @@ func TestRemoteSign(t *testing.T) {
 	defer closeTestServer(t, remoteServer)
 
 	remoteConfig := testsuite.NewConfig(t, []byte(validMinimalRemoteConfig))
-	// override with test server address, ignore url prefix "http://"
-	remoteConfig.Signing.OverrideRemotes(remoteServer.URL[7:])
+	// override with test server address
+	remoteConfig.Signing.OverrideRemotes(remoteServer.URL)
 	verifyRemoteSign(t, remoteConfig)
 }
 
@@ -158,6 +160,7 @@ func TestRemoteMutualTLSSign(t *testing.T) {
 }
 
 func remoteTLSSign(t *testing.T, isMutual bool) {
+	t.Skip("expired cert https://github.com/cloudflare/cfssl/issues/1237")
 	certPool, err := helpers.LoadPEMCertPool(testCaFile)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +187,7 @@ func verifyRemoteSign(t *testing.T, remoteConfig *config.Config) {
 
 	hosts := []string{"cloudflare.com"}
 	for _, test := range testsuite.CSRTests {
-		csr, err := ioutil.ReadFile(test.File)
+		csr, err := os.ReadFile(test.File)
 		if err != nil {
 			t.Fatal("CSR loading error:", err)
 		}
@@ -221,7 +224,7 @@ func TestRemoteSignBadServerAndOverride(t *testing.T) {
 	s := newRemoteSigner(t, remoteConfig.Signing)
 
 	hosts := []string{"cloudflare.com"}
-	csr, err := ioutil.ReadFile("../local/testdata/rsa2048.csr")
+	csr, err := os.ReadFile("../local/testdata/rsa2048.csr")
 	if err != nil {
 		t.Fatal("CSR loading error:", err)
 	}
@@ -231,7 +234,7 @@ func TestRemoteSignBadServerAndOverride(t *testing.T) {
 		t.Fatal("Should return error")
 	}
 
-	remoteConfig.Signing.OverrideRemotes(remoteServer.URL[7:])
+	remoteConfig.Signing.OverrideRemotes(remoteServer.URL)
 	s.SetPolicy(remoteConfig.Signing)
 	certBytes, err := s.Sign(signer.SignRequest{
 		Hosts:   hosts,

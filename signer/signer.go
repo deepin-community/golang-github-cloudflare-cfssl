@@ -4,6 +4,7 @@ package signer
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha1"
@@ -12,6 +13,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"math/big"
+	"net/http"
 	"strings"
 	"time"
 
@@ -45,7 +47,7 @@ type Extension struct {
 // Extensions provided in the signRequest are copied into the certificate, as
 // long as they are in the ExtensionWhitelist for the signer's policy.
 // Extensions requested in the CSR are ignored, except for those processed by
-// ParseCertificateRequest (mainly subjectAltName).
+// ParseCertificateRequest (mainly subjectAltName) and DelegationUsage.
 type SignRequest struct {
 	Hosts       []string    `json:"hosts"`
 	Request     string      `json:"certificate_request"`
@@ -55,6 +57,24 @@ type SignRequest struct {
 	Label       string      `json:"label"`
 	Serial      *big.Int    `json:"serial,omitempty"`
 	Extensions  []Extension `json:"extensions,omitempty"`
+	// If provided, NotBefore will be used without modification (except
+	// for canonicalization) as the value of the notBefore field of the
+	// certificate. In particular no backdating adjustment will be made
+	// when NotBefore is provided.
+	NotBefore time.Time
+	// If provided, NotAfter will be used without modification (except
+	// for canonicalization) as the value of the notAfter field of the
+	// certificate.
+	NotAfter time.Time
+	// If ReturnPrecert is true a certificate with the CT poison extension
+	// will be returned from the Signer instead of attempting to retrieve
+	// SCTs and populate the tbsCert with them itself. This precert can then
+	// be passed to SignFromPrecert with the SCTs in order to create a
+	// valid certificate.
+	ReturnPrecert bool
+
+	// Arbitrary metadata to be stored in certdb.
+	Metadata map[string]interface{} `json:"metadata"`
 }
 
 // appendIf appends to a if s is not an empty string.
@@ -96,9 +116,11 @@ type Signer interface {
 	Info(info.Req) (*info.Resp, error)
 	Policy() *config.Signing
 	SetDBAccessor(certdb.Accessor)
+	GetDBAccessor() certdb.Accessor
 	SetPolicy(*config.Signing)
 	SigAlgo() x509.SignatureAlgorithm
 	Sign(req SignRequest) (cert []byte, err error)
+	SetReqModifier(func(*http.Request, []byte))
 }
 
 // Profile gets the specific profile from the signer
@@ -147,34 +169,62 @@ func DefaultSigAlgo(priv crypto.Signer) x509.SignatureAlgorithm {
 		default:
 			return x509.ECDSAWithSHA1
 		}
+	case ed25519.PublicKey:
+		return x509.PureEd25519
 	default:
 		return x509.UnknownSignatureAlgorithm
 	}
 }
 
+func isCommonAttr(t []int) bool {
+	return (len(t) == 4 && t[0] == 2 && t[1] == 5 && t[2] == 4 && (t[3] == 3 || (t[3] >= 5 && t[3] <= 11) || t[3] == 17))
+}
+
 // ParseCertificateRequest takes an incoming certificate request and
 // builds a certificate template from it.
-func ParseCertificateRequest(s Signer, csrBytes []byte) (template *x509.Certificate, err error) {
+func ParseCertificateRequest(s Signer, p *config.SigningProfile, csrBytes []byte) (template *x509.Certificate, err error) {
 	csrv, err := x509.ParseCertificateRequest(csrBytes)
 	if err != nil {
 		err = cferr.Wrap(cferr.CSRError, cferr.ParseFailed, err)
 		return
 	}
 
-	err = helpers.CheckSignature(csrv, csrv.SignatureAlgorithm, csrv.RawTBSCertificateRequest, csrv.Signature)
+	var r pkix.RDNSequence
+	_, err = asn1.Unmarshal(csrv.RawSubject, &r)
+
+	if err != nil {
+		err = cferr.Wrap(cferr.CSRError, cferr.ParseFailed, err)
+		return
+	}
+
+	var subject pkix.Name
+	subject.FillFromRDNSequence(&r)
+
+	for _, v := range r {
+		for _, vv := range v {
+			if !isCommonAttr(vv.Type) {
+				subject.ExtraNames = append(subject.ExtraNames, vv)
+			}
+		}
+	}
+
+	err = csrv.CheckSignature()
 	if err != nil {
 		err = cferr.Wrap(cferr.CSRError, cferr.KeyMismatch, err)
 		return
 	}
 
 	template = &x509.Certificate{
-		Subject:            csrv.Subject,
+		Subject:            subject,
 		PublicKeyAlgorithm: csrv.PublicKeyAlgorithm,
 		PublicKey:          csrv.PublicKey,
 		SignatureAlgorithm: s.SigAlgo(),
 		DNSNames:           csrv.DNSNames,
 		IPAddresses:        csrv.IPAddresses,
 		EmailAddresses:     csrv.EmailAddresses,
+		URIs:               csrv.URIs,
+		Extensions:         csrv.Extensions,
+		ExtraExtensions:    []pkix.Extension{},
 	}
 
 	for _, val := range csrv.Extensions {
@@ -194,6 +244,13 @@ func ParseCertificateRequest(s Signer, csrBytes []byte) (template *x509.Certific
 			template.IsCA = constraints.IsCA
 			template.MaxPathLen = constraints.MaxPathLen
 			template.MaxPathLenZero = template.MaxPathLen == 0
+		} else if val.Id.Equal(helpers.DelegationUsage) {
+			template.ExtraExtensions = append(template.ExtraExtensions, val)
+		} else {
+			// If the profile has 'copy_extensions' to true then lets add it
+			if p.CopyExtensions {
+				template.ExtraExtensions = append(template.ExtraExtensions, val)
+			}
 		}
 	}
 
@@ -229,16 +286,17 @@ func ComputeSKI(template *x509.Certificate) ([]byte, error) {
 // the certificate template as possible from the profiles and current
 // template. It fills in the key uses, expiration, revocation URLs
 // and SKI.
-func FillTemplate(template *x509.Certificate, defaultProfile, profile *config.SigningProfile) error {
+func FillTemplate(template *x509.Certificate, defaultProfile, profile *config.SigningProfile, notBefore time.Time, notAfter time.Time) error {
 	ski, err := ComputeSKI(template)
+	if err != nil {
+		return err
+	}
 
 	var (
 		eku             []x509.ExtKeyUsage
 		ku              x509.KeyUsage
 		backdate        time.Duration
 		expiry          time.Duration
-		notBefore       time.Time
-		notAfter        time.Time
 		crlURL, ocspURL string
 		issuerURL       = profile.IssuerURL
 	)
@@ -265,23 +323,29 @@ func FillTemplate(template *x509.Certificate, defaultProfile, profile *config.Si
 	if ocspURL = profile.OCSP; ocspURL == "" {
 		ocspURL = defaultProfile.OCSP
 	}
-	if backdate = profile.Backdate; backdate == 0 {
-		backdate = -5 * time.Minute
-	} else {
-		backdate = -1 * profile.Backdate
-	}
 
-	if !profile.NotBefore.IsZero() {
-		notBefore = profile.NotBefore.UTC()
-	} else {
-		notBefore = time.Now().Round(time.Minute).Add(backdate).UTC()
+	if notBefore.IsZero() {
+		if !profile.NotBefore.IsZero() {
+			notBefore = profile.NotBefore
+		} else {
+			if backdate = profile.Backdate; backdate == 0 {
+				backdate = -5 * time.Minute
+			} else {
+				backdate = -1 * profile.Backdate
+			}
+			notBefore = time.Now().Round(time.Minute).Add(backdate)
+		}
 	}
+	notBefore = notBefore.UTC()
 
-	if !profile.NotAfter.IsZero() {
-		notAfter = profile.NotAfter.UTC()
-	} else {
-		notAfter = notBefore.Add(expiry).UTC()
+	if notAfter.IsZero() {
+		if !profile.NotAfter.IsZero() {
+			notAfter = profile.NotAfter
+		} else {
+			notAfter = notBefore.Add(expiry)
+		}
 	}
+	notAfter = notAfter.UTC()
 
 	template.NotBefore = notBefore
 	template.NotAfter = notAfter
@@ -296,6 +360,7 @@ func FillTemplate(template *x509.Certificate, defaultProfile, profile *config.Si
 		}
 		template.DNSNames = nil
 		template.EmailAddresses = nil
+		template.URIs = nil
 	}
 	template.SubjectKeyId = ski
 

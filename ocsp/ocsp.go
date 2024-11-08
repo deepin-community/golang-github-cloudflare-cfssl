@@ -1,9 +1,7 @@
 /*
-
 Package ocsp exposes OCSP signing functionality, much like the signer
 package does for certificate signing.  It also provies a basic OCSP
 responder stack for serving pre-signed OCSP responses.
-
 */
 package ocsp
 
@@ -12,7 +10,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"io/ioutil"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +52,14 @@ type SignRequest struct {
 	Reason      int
 	RevokedAt   time.Time
 	Extensions  []pkix.Extension
+	// IssuerHash is the hashing function used to hash the issuer subject and public key
+	// in the OCSP response. Valid values are crypto.SHA1, crypto.SHA256, crypto.SHA384,
+	// and crypto.SHA512. If zero, the default is crypto.SHA1.
+	IssuerHash crypto.Hash
+	// If provided ThisUpdate will override the default usage of time.Now().Truncate(time.Hour)
+	ThisUpdate *time.Time
+	// If provided NextUpdate will override the default usage of ThisUpdate.Add(signerInterval)
+	NextUpdate *time.Time
 }
 
 // Signer represents a general signer of OCSP responses.  It is
@@ -100,17 +106,17 @@ func ReasonStringToCode(reason string) (reasonCode int, err error) {
 // from PEM files, and takes an interval in seconds
 func NewSignerFromFile(issuerFile, responderFile, keyFile string, interval time.Duration) (Signer, error) {
 	log.Debug("Loading issuer cert: ", issuerFile)
-	issuerBytes, err := ioutil.ReadFile(issuerFile)
+	issuerBytes, err := helpers.ReadBytes(issuerFile)
 	if err != nil {
 		return nil, err
 	}
 	log.Debug("Loading responder cert: ", responderFile)
-	responderBytes, err := ioutil.ReadFile(responderFile)
+	responderBytes, err := os.ReadFile(responderFile)
 	if err != nil {
 		return nil, err
 	}
 	log.Debug("Loading responder key: ", keyFile)
-	keyBytes, err := ioutil.ReadFile(keyFile)
+	keyBytes, err := os.ReadFile(keyFile)
 	if err != nil {
 		return nil, cferr.Wrap(cferr.CertificateError, cferr.ReadFailed, err)
 	}
@@ -127,7 +133,7 @@ func NewSignerFromFile(issuerFile, responderFile, keyFile string, interval time.
 
 	key, err := helpers.ParsePrivateKeyPEM(keyBytes)
 	if err != nil {
-		log.Debug("Malformed private key %v", err)
+		log.Debugf("Malformed private key %v", err)
 		return nil, err
 	}
 
@@ -156,13 +162,24 @@ func (s StandardSigner) Sign(req SignRequest) ([]byte, error) {
 	if bytes.Compare(req.Certificate.RawIssuer, s.issuer.RawSubject) != 0 {
 		return nil, cferr.New(cferr.OCSPError, cferr.IssuerMismatch)
 	}
-	if req.Certificate.CheckSignatureFrom(s.issuer) != nil {
-		return nil, cferr.New(cferr.OCSPError, cferr.IssuerMismatch)
+
+	err := req.Certificate.CheckSignatureFrom(s.issuer)
+	if err != nil {
+		return nil, cferr.Wrap(cferr.OCSPError, cferr.VerifyFailed, err)
 	}
 
-	// Round thisUpdate times down to the nearest hour
-	thisUpdate := time.Now().Truncate(time.Hour)
-	nextUpdate := thisUpdate.Add(s.interval)
+	var thisUpdate, nextUpdate time.Time
+	if req.ThisUpdate != nil {
+		thisUpdate = *req.ThisUpdate
+	} else {
+		// Round thisUpdate times down to the nearest hour
+		thisUpdate = time.Now().Truncate(time.Hour)
+	}
+	if req.NextUpdate != nil {
+		nextUpdate = *req.NextUpdate
+	} else {
+		nextUpdate = thisUpdate.Add(s.interval)
+	}
 
 	status, ok := StatusCode[req.Status]
 	if !ok {
@@ -184,6 +201,7 @@ func (s StandardSigner) Sign(req SignRequest) ([]byte, error) {
 		NextUpdate:      nextUpdate,
 		Certificate:     certificate,
 		ExtraExtensions: req.Extensions,
+		IssuerHash:      req.IssuerHash,
 	}
 
 	if status == ocsp.Revoked {

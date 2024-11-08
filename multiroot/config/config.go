@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"net/url"
 	"os"
@@ -131,7 +130,7 @@ func LoadRoot(cfg map[string]string) (*Root, error) {
 		return nil, err
 	}
 
-	in, err := ioutil.ReadFile(certPath)
+	in, err := os.ReadFile(certPath)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +181,7 @@ func parsePrivateKeySpec(spec string, cfg map[string]string) (crypto.Signer, err
 		// stored in the Path field.
 		log.Debug("loading private key file", specURL.Path)
 		path := filepath.Join(specURL.Host, specURL.Path)
-		in, err := ioutil.ReadFile(path)
+		in, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
@@ -202,7 +201,7 @@ func parsePrivateKeySpec(spec string, cfg map[string]string) (crypto.Signer, err
 	case "rofile":
 		log.Warning("Red October support is currently experimental")
 		path := filepath.Join(specURL.Host, specURL.Path)
-		in, err := ioutil.ReadFile(path)
+		in, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
@@ -241,6 +240,19 @@ func parsePrivateKeySpec(spec string, cfg map[string]string) (crypto.Signer, err
 		if err != nil {
 			return nil, err
 		}
+
+		log.Debug("attempting to load PEM-encoded private key")
+		priv, err = helpers.ParsePrivateKeyPEM(in)
+		if err != nil {
+			log.Debug("file is not a PEM-encoded private key")
+			log.Debug("attempting to load DER-encoded private key")
+			priv, err = derhelpers.ParsePrivateKeyDER(in)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		log.Debug("loaded private key")
 
 		return priv, nil
 	default:

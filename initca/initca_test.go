@@ -1,9 +1,10 @@
 package initca
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/rsa"
-	"io/ioutil"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,13 +16,14 @@ import (
 	"github.com/cloudflare/cfssl/signer/local"
 )
 
-var validKeyParams = []csr.BasicKeyRequest{
-	{"rsa", 2048},
-	{"rsa", 3072},
-	{"rsa", 4096},
-	{"ecdsa", 256},
-	{"ecdsa", 384},
-	{"ecdsa", 521},
+var validKeyParams = []csr.KeyRequest{
+	{A: "rsa", S: 2048},
+	{A: "rsa", S: 3072},
+	{A: "rsa", S: 4096},
+	{A: "ecdsa", S: 256},
+	{A: "ecdsa", S: 384},
+	{A: "ecdsa", S: 521},
+	{A: "ed25519"},
 }
 
 var validCAConfigs = []csr.CAConfig{
@@ -45,24 +47,28 @@ var csrFiles = []string{
 	"testdata/ecdsa256.csr",
 	"testdata/ecdsa384.csr",
 	"testdata/ecdsa521.csr",
+	"testdata/ed25519.csr",
 }
 
 var testRSACAFile = "testdata/5min-rsa.pem"
 var testRSACAKeyFile = "testdata/5min-rsa-key.pem"
 var testECDSACAFile = "testdata/5min-ecdsa.pem"
 var testECDSACAKeyFile = "testdata/5min-ecdsa-key.pem"
+var testED25519CAFile = "testdata/5min-ed25519.pem"
+var testED25519CAKeyFile = "testdata/5min-ed25519-key.pem"
 
-var invalidCryptoParams = []csr.BasicKeyRequest{
+var invalidCryptoParams = []csr.KeyRequest{
 	// Weak Key
-	{"rsa", 1024},
+	{A: "rsa", S: 1024},
 	// Bad param
-	{"rsaCrypto", 2048},
-	{"ecdsa", 2000},
+	{A: "rsaCrypto", S: 2048},
+	{A: "ecdsa", S: 2000},
 }
 
 func TestInitCA(t *testing.T) {
 	var req *csr.CertificateRequest
 	hostname := "cloudflare.com"
+	crl := "http://crl.cloudflare.com/655c6a9b-01c6-4eea-bf21-be690cc315e0.crl" // cert_uuid.crl
 	for _, param := range validKeyParams {
 		for _, caconfig := range validCAConfigs {
 			req = &csr.CertificateRequest{
@@ -79,6 +85,7 @@ func TestInitCA(t *testing.T) {
 				Hosts:      []string{hostname, "www." + hostname},
 				KeyRequest: &param,
 				CA:         &caconfig,
+				CRL:        crl,
 			}
 			certBytes, _, keyBytes, err := New(req)
 			if err != nil {
@@ -91,6 +98,18 @@ func TestInitCA(t *testing.T) {
 			cert, err := helpers.ParseCertificatePEM(certBytes)
 			if err != nil {
 				t.Fatal("InitCA cert parsing failed:", err)
+			}
+
+			// Verify if the CRL is set
+			crlSet := false
+			for _, certCrl := range cert.CRLDistributionPoints {
+				if certCrl == crl {
+					crlSet = true
+					break
+				}
+			}
+			if !crlSet {
+				t.Fatal("Missing CRL on certificate")
 			}
 
 			// Verify key parameters.
@@ -125,7 +144,7 @@ func TestInitCA(t *testing.T) {
 				}
 			}
 
-			// Replace the default CAPolicy with a test (short expiry) version.
+			// Replace the default CAPolicy with a test (short expiry) version and add a crl
 			CAPolicy = func() *config.Signing {
 				return &config.Signing{
 					Default: &config.SigningProfile{
@@ -133,6 +152,7 @@ func TestInitCA(t *testing.T) {
 						ExpiryString: "300s",
 						Expiry:       300 * time.Second,
 						CAConstraint: config.CAConstraint{IsCA: true},
+						CRL:          crl,
 					},
 				}
 			}
@@ -144,9 +164,9 @@ func TestInitCA(t *testing.T) {
 			}
 			s.SetPolicy(CAPolicy())
 
-			// Sign RSA and ECDSA customer CSRs.
+			// Sign RSA, ECDSA and ed25519 customer CSRs.
 			for _, csrFile := range csrFiles {
-				csrBytes, err := ioutil.ReadFile(csrFile)
+				csrBytes, err := os.ReadFile(csrFile)
 				if err != nil {
 					t.Fatal("CSR loading error:", err)
 				}
@@ -193,7 +213,7 @@ func TestInvalidCAConfig(t *testing.T) {
 
 	_, _, _, err := New(req)
 	if err == nil {
-		t.Fatal("InitCA with bad CAConfig should fail:", err)
+		t.Fatalf("InitCA with bad CAConfig should fail: %v", invalidCAConfig)
 	}
 }
 func TestInvalidCryptoParams(t *testing.T) {
@@ -216,7 +236,7 @@ func TestInvalidCryptoParams(t *testing.T) {
 		}
 		_, _, _, err := New(req)
 		if err == nil {
-			t.Fatal("InitCA with bad params should fail:", err)
+			t.Fatalf("InitCA with bad CAConfig should fail: %v", invalidCAConfig)
 		}
 
 		if !strings.Contains(err.Error(), `"code":2400`) {
@@ -295,6 +315,43 @@ func TestRenewRSA(t *testing.T) {
 	}
 }
 
+func TestRenewED25519(t *testing.T) {
+	certPEM, err := RenewFromPEM(testED25519CAFile, testED25519CAKeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// must parse ok
+	cert, err := helpers.ParseCertificatePEM(certPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !cert.IsCA {
+		t.Fatal("renewed CA certificate is not CA")
+	}
+
+	// cert expiry must be 5 minutes
+	expiry := cert.NotAfter.Sub(cert.NotBefore).Seconds()
+	if expiry >= 301 || expiry <= 299 {
+		t.Fatal("expiry is not correct:", expiry)
+	}
+
+	// check subject
+
+	if cert.Subject.CommonName != "" {
+		t.Fatal("Bad CommonName")
+	}
+
+	if len(cert.Subject.Country) != 1 || cert.Subject.Country[0] != "US" {
+		t.Fatal("Bad Subject")
+	}
+
+	if len(cert.Subject.Organization) != 1 || cert.Subject.Organization[0] != "CloudFlare, Inc." {
+		t.Fatal("Bad Subject")
+	}
+}
+
 func TestRenewECDSA(t *testing.T) {
 	certPEM, err := RenewFromPEM(testECDSACAFile, testECDSACAKeyFile)
 	if err != nil {
@@ -336,5 +393,49 @@ func TestRenewMismatch(t *testing.T) {
 	_, err := RenewFromPEM(testECDSACAFile, testRSACAKeyFile)
 	if err == nil {
 		t.Fatal("Fail to detect cert/key mismatch")
+	}
+}
+
+func TestRenew(t *testing.T) {
+	in, err := os.ReadFile(testECDSACAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cert, err := helpers.ParseCertificatePEM(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	in, err = os.ReadFile(testECDSACAKeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	priv, err := helpers.ParsePrivateKeyPEM(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	renewed, err := Update(cert, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newCert, err := helpers.ParseCertificatePEM(renewed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(newCert.RawSubjectPublicKeyInfo, cert.RawSubjectPublicKeyInfo) {
+		t.Fatal("Update returned a certificate with different subject public key info")
+	}
+
+	if !bytes.Equal(newCert.RawSubject, cert.RawSubject) {
+		t.Fatal("Update returned a certificate with different subject info")
+	}
+
+	if !bytes.Equal(newCert.RawIssuer, cert.RawIssuer) {
+		t.Fatal("Update returned a certificate with different issuer info")
 	}
 }

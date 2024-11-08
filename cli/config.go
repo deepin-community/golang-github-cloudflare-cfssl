@@ -30,6 +30,7 @@ type Config struct {
 	IntBundleFile     string
 	Address           string
 	Port              int
+	MinTLSVersion     string
 	Password          string
 	ConfigFile        string
 	CFG               *config.Config
@@ -67,6 +68,8 @@ type Config struct {
 	CNOverride        string
 	AKI               string
 	DBConfigFile      string
+	CRLExpiration     time.Duration
+	Disable           string
 }
 
 // registerFlags defines all cfssl command flags and associates their values with variables.
@@ -74,8 +77,8 @@ func registerFlags(c *Config, f *flag.FlagSet) {
 	f.StringVar(&c.Hostname, "hostname", "", "Hostname for the cert, could be a comma-separated hostname list")
 	f.StringVar(&c.CertFile, "cert", "", "Client certificate that contains the public key")
 	f.StringVar(&c.CSRFile, "csr", "", "Certificate signature request file for new public key")
-	f.StringVar(&c.CAFile, "ca", "", "CA used to sign the new certificate")
-	f.StringVar(&c.CAKeyFile, "ca-key", "", "CA private key")
+	f.StringVar(&c.CAFile, "ca", "", "CA used to sign the new certificate -- accepts '[file:]fname' or 'env:varname'")
+	f.StringVar(&c.CAKeyFile, "ca-key", "", "CA private key -- accepts '[file:]fname' or 'env:varname'")
 	f.StringVar(&c.TLSCertFile, "tls-cert", "", "Other endpoint CA to set up TLS protocol")
 	f.StringVar(&c.TLSKeyFile, "tls-key", "", "Other endpoint CA private key")
 	f.StringVar(&c.MutualTLSCAFile, "mutual-tls-ca", "", "Mutual TLS - require clients be signed by this CA ")
@@ -89,6 +92,7 @@ func registerFlags(c *Config, f *flag.FlagSet) {
 	f.StringVar(&c.IntBundleFile, "int-bundle", "", "path to intermediate certificate store")
 	f.StringVar(&c.Address, "address", "127.0.0.1", "Address to bind")
 	f.IntVar(&c.Port, "port", 8888, "Port to bind")
+	f.StringVar(&c.MinTLSVersion, "min-tls-version", "", "Minimum version of TLS to use, defaults to 1.0")
 	f.StringVar(&c.ConfigFile, "config", "", "path to configuration file")
 	f.StringVar(&c.Profile, "profile", "", "signing profile to use")
 	f.BoolVar(&c.IsCA, "initca", false, "initialise new CA")
@@ -120,12 +124,14 @@ func registerFlags(c *Config, f *flag.FlagSet) {
 	f.StringVar(&c.Password, "password", "0", "Password for accessing PKCS #12 data passed to bundler")
 	f.StringVar(&c.Usage, "usage", "", "usage of private key")
 	f.StringVar(&c.PGPPrivate, "pgp-private", "", "file to load a PGP Private key decryption")
-	f.StringVar(&c.PGPName, "pgp-name", "", "PGP public key name, can be a comma-sepearted  key name list")
+	f.StringVar(&c.PGPName, "pgp-name", "", "PGP public key name, can be a comma-separated  key name list")
 	f.StringVar(&c.Serial, "serial", "", "certificate serial number")
 	f.StringVar(&c.CNOverride, "cn", "", "certificate common name (CN)")
 	f.StringVar(&c.AKI, "aki", "", "certificate issuer (authority) key identifier")
 	f.StringVar(&c.DBConfigFile, "db-config", "", "certificate db configuration file")
+	f.DurationVar(&c.CRLExpiration, "expiry", 7*helpers.OneDay, "time from now after which the CRL will expire (default: one week)")
 	f.IntVar(&log.Level, "loglevel", log.LevelInfo, "Log level (0 = DEBUG, 5 = FATAL)")
+	f.StringVar(&c.Disable, "disable", "", "endpoints to disable")
 }
 
 // RootFromConfig returns a universal signer Root structure that can

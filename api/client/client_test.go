@@ -33,7 +33,7 @@ func TestNewServer(t *testing.T) {
 
 	}
 
-	s = NewServer("127.0.0.1:8888")
+	s = NewServer("http://127.0.0.1:8888")
 	hosts := s.Hosts()
 	if len(hosts) != 1 || hosts[0] != "http://127.0.0.1:8888" {
 		t.Fatalf("expected [http://127.0.0.1:8888], but have %v", hosts)
@@ -97,7 +97,7 @@ func TestNewMutualTLSServer(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error with sign function")
 	}
-	if !strings.Contains(err.Error(), "Post https://nohost:8888/api/v1/cfssl/sign: dial tcp: lookup nohost") {
+	if !(strings.Contains(err.Error(), "Post")) && !(strings.Contains(err.Error(), "https://nohost:8888/api/v1/cfssl/sign")) && !(strings.Contains(err.Error(), "dial tcp: lookup nohost: no such host")) {
 		t.Fatalf("no error message %v", err)
 	}
 }

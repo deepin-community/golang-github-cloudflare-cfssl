@@ -3,8 +3,10 @@ package serve
 
 import (
 	"crypto/tls"
+	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,11 +15,14 @@ import (
 	"strconv"
 	"strings"
 
-	rice "github.com/GeertJohan/go.rice"
+	"github.com/cloudflare/cfssl/api"
 	"github.com/cloudflare/cfssl/api/bundle"
+	"github.com/cloudflare/cfssl/api/certadd"
 	"github.com/cloudflare/cfssl/api/certinfo"
 	"github.com/cloudflare/cfssl/api/crl"
+	"github.com/cloudflare/cfssl/api/gencrl"
 	"github.com/cloudflare/cfssl/api/generator"
+	"github.com/cloudflare/cfssl/api/health"
 	"github.com/cloudflare/cfssl/api/info"
 	"github.com/cloudflare/cfssl/api/initca"
 	apiocsp "github.com/cloudflare/cfssl/api/ocsp"
@@ -43,21 +48,21 @@ import (
 var serverUsageText = `cfssl serve -- set up a HTTP server handles CF SSL requests
 
 Usage of serve:
-        cfssl serve [-address address] [-ca cert] [-ca-bundle bundle] \
+        cfssl serve [-address address] [-min-tls-version version] [-ca cert] [-ca-bundle bundle] \
                     [-ca-key key] [-int-bundle bundle] [-int-dir dir] [-port port] \
                     [-metadata file] [-remote remote_host] [-config config] \
-                    [-responder cert] [-responder-key key] [-tls-cert cert] [-tls-key key] \
-                    [-mutual-tls-ca ca] [-mutual-tls-cn regex] \
+                    [-responder cert] [-responder-key key] \
+                    [-tls-cert cert] [-tls-key key] [-mutual-tls-ca ca] [-mutual-tls-cn regex] \
                     [-tls-remote-ca ca] [-mutual-tls-client-cert cert] [-mutual-tls-client-key key] \
-                    [-db-config db-config]
+                    [-db-config db-config] [-disable endpoint[,endpoint]]
 
 Flags:
 `
 
 // Flags used by 'cfssl serve'
-var serverFlags = []string{"address", "port", "ca", "ca-key", "ca-bundle", "int-bundle", "int-dir", "metadata",
-	"remote", "config", "responder", "responder-key", "tls-key", "tls-cert", "mutual-tls-ca", "mutual-tls-cn",
-	"tls-remote-ca", "mutual-tls-client-cert", "mutual-tls-client-key", "db-config"}
+var serverFlags = []string{"address", "port", "min-tls-version", "ca", "ca-key", "ca-bundle", "int-bundle", "int-dir",
+	"metadata", "remote", "config", "responder", "responder-key", "tls-key", "tls-cert", "mutual-tls-ca",
+	"mutual-tls-cn", "tls-remote-ca", "mutual-tls-client-cert", "mutual-tls-client-key", "db-config", "disable"}
 
 var (
 	conf       cli.Config
@@ -77,37 +82,28 @@ func v1APIPath(path string) string {
 	return (&url.URL{Path: path}).String()
 }
 
-// httpBox implements http.FileSystem which allows the use of Box with a http.FileServer.
-// Atempting to Open an API endpoint will result in an error.
-type httpBox struct {
-	*rice.Box
-	redirects map[string]string
+//go:embed static
+var staticContent embed.FS
+
+var staticRedirections = map[string]string{
+	"bundle":   "index.html",
+	"scan":     "index.html",
+	"packages": "index.html",
 }
 
-func (hb *httpBox) findStaticBox() (err error) {
-	hb.Box, err = rice.FindBox("static")
-	return
+type staticFS struct {
+	fs           fs.FS
+	redirections map[string]string
 }
 
-// Open returns a File for non-API enpoints using the http.File interface.
-func (hb *httpBox) Open(name string) (http.File, error) {
+func (s *staticFS) Open(name string) (fs.File, error) {
 	if strings.HasPrefix(name, V1APIPrefix) {
 		return nil, os.ErrNotExist
 	}
-
-	if location, ok := hb.redirects[name]; ok {
-		return hb.Box.Open(location)
+	if location, ok := s.redirections[name]; ok {
+		return s.fs.Open(location)
 	}
-
-	return hb.Box.Open(name)
-}
-
-// staticBox is the box containing all static assets.
-var staticBox = &httpBox{
-	redirects: map[string]string{
-		"/scan":   "/index.html",
-		"/bundle": "/index.html",
-	},
+	return s.fs.Open(name)
 }
 
 var errBadSigner = errors.New("signer not initialized")
@@ -118,14 +114,40 @@ var endpoints = map[string]func() (http.Handler, error){
 		if s == nil {
 			return nil, errBadSigner
 		}
-		return signhandler.NewHandlerFromSigner(s)
+
+		h, err := signhandler.NewHandlerFromSigner(s)
+		if err != nil {
+			return nil, err
+		}
+
+		if conf.CABundleFile != "" && conf.IntBundleFile != "" {
+			sh := h.Handler.(*signhandler.Handler)
+			if err := sh.SetBundler(conf.CABundleFile, conf.IntBundleFile); err != nil {
+				return nil, err
+			}
+		}
+
+		return h, nil
 	},
 
 	"authsign": func() (http.Handler, error) {
 		if s == nil {
 			return nil, errBadSigner
 		}
-		return signhandler.NewAuthHandlerFromSigner(s)
+
+		h, err := signhandler.NewAuthHandlerFromSigner(s)
+		if err != nil {
+			return nil, err
+		}
+
+		if conf.CABundleFile != "" && conf.IntBundleFile != "" {
+			sh := h.(*api.HTTPHandler).Handler.(*signhandler.AuthHandler)
+			if err := sh.SetBundler(conf.CABundleFile, conf.IntBundleFile); err != nil {
+				return nil, err
+			}
+		}
+
+		return h, nil
 	},
 
 	"info": func() (http.Handler, error) {
@@ -135,18 +157,37 @@ var endpoints = map[string]func() (http.Handler, error){
 		return info.NewHandler(s)
 	},
 
+	"crl": func() (http.Handler, error) {
+		if s == nil {
+			return nil, errBadSigner
+		}
+
+		if db == nil {
+			return nil, errNoCertDBConfigured
+		}
+
+		return crl.NewHandler(certsql.NewAccessor(db), conf.CAFile, conf.CAKeyFile)
+	},
+
 	"gencrl": func() (http.Handler, error) {
 		if s == nil {
 			return nil, errBadSigner
 		}
-		return crl.NewHandler(), nil
+		return gencrl.NewHandler(), nil
 	},
 
 	"newcert": func() (http.Handler, error) {
 		if s == nil {
 			return nil, errBadSigner
 		}
-		return generator.NewCertGeneratorHandlerFromSigner(generator.CSRValidate, s), nil
+		h := generator.NewCertGeneratorHandlerFromSigner(generator.CSRValidate, s)
+		if conf.CABundleFile != "" && conf.IntBundleFile != "" {
+			cg := h.(api.HTTPHandler).Handler.(*generator.CertGeneratorHandler)
+			if err := cg.SetBundler(conf.CABundleFile, conf.IntBundleFile); err != nil {
+				return nil, err
+			}
+		}
+		return h, nil
 	},
 
 	"bundle": func() (http.Handler, error) {
@@ -170,6 +211,10 @@ var endpoints = map[string]func() (http.Handler, error){
 	},
 
 	"certinfo": func() (http.Handler, error) {
+		if db != nil {
+			return certinfo.NewAccessorHandler(certsql.NewAccessor(db)), nil
+		}
+
 		return certinfo.NewHandler(), nil
 	},
 
@@ -188,26 +233,44 @@ var endpoints = map[string]func() (http.Handler, error){
 	},
 
 	"/": func() (http.Handler, error) {
-		if err := staticBox.findStaticBox(); err != nil {
-			return nil, err
-		}
+		subFS, _ := fs.Sub(staticContent, "static")
+		return http.FileServer(http.FS(&staticFS{fs: subFS, redirections: staticRedirections})), nil
+	},
 
-		return http.FileServer(staticBox), nil
+	"health": func() (http.Handler, error) {
+		return health.NewHealthCheck(), nil
+	},
+
+	"certadd": func() (http.Handler, error) {
+		return certadd.NewHandler(certsql.NewAccessor(db), nil), nil
 	},
 }
 
 // registerHandlers instantiates various handlers and associate them to corresponding endpoints.
 func registerHandlers() {
-	for path, getHandler := range endpoints {
-		path = v1APIPath(path)
-		log.Infof("Setting up '%s' endpoint", path)
-		if handler, err := getHandler(); err != nil {
-			log.Warningf("endpoint '%s' is disabled: %v", path, err)
-		} else {
-			http.Handle(path, handler)
+	disabled := make(map[string]bool)
+	if conf.Disable != "" {
+		for _, endpoint := range strings.Split(conf.Disable, ",") {
+			disabled[endpoint] = true
 		}
 	}
 
+	for path, getHandler := range endpoints {
+		log.Debugf("getHandler for %s", path)
+
+		if _, ok := disabled[path]; ok {
+			log.Infof("endpoint '%s' is explicitly disabled", path)
+		} else if handler, err := getHandler(); err != nil {
+			log.Warningf("endpoint '%s' is disabled: %v", path, err)
+		} else {
+			if path, handler, err = wrapHandler(path, handler, err); err != nil {
+				log.Warningf("endpoint '%s' is disabled by wrapper: %v", path, err)
+			} else {
+				log.Infof("endpoint '%s' is enabled", path)
+				http.Handle(path, handler)
+			}
+		}
+	}
 	log.Info("Handler set up complete.")
 }
 
@@ -248,6 +311,11 @@ func serverMain(args []string, c cli.Config) error {
 
 	addr := net.JoinHostPort(conf.Address, strconv.Itoa(conf.Port))
 
+	tlscfg := tls.Config{}
+	if conf.MinTLSVersion != "" {
+		tlscfg.MinVersion = helpers.StringTLSVersion(conf.MinTLSVersion)
+	}
+
 	if conf.TLSCertFile == "" || conf.TLSKeyFile == "" {
 		log.Info("Now listening on ", addr)
 		return http.ListenAndServe(addr, nil)
@@ -258,12 +326,12 @@ func serverMain(args []string, c cli.Config) error {
 			return fmt.Errorf("failed to load mutual TLS CA file: %s", err)
 		}
 
+		tlscfg.ClientAuth = tls.RequireAndVerifyClientCert
+		tlscfg.ClientCAs = clientPool
+
 		server := http.Server{
-			Addr: addr,
-			TLSConfig: &tls.Config{
-				ClientAuth: tls.RequireAndVerifyClientCert,
-				ClientCAs:  clientPool,
-			},
+			Addr:      addr,
+			TLSConfig: &tlscfg,
 		}
 
 		if conf.MutualTLSCNRegex != "" {
@@ -288,9 +356,32 @@ func serverMain(args []string, c cli.Config) error {
 		return server.ListenAndServeTLS(conf.TLSCertFile, conf.TLSKeyFile)
 	}
 	log.Info("Now listening on https://", addr)
-	return http.ListenAndServeTLS(addr, conf.TLSCertFile, conf.TLSKeyFile, nil)
+	server := http.Server{
+		Addr:      addr,
+		TLSConfig: &tlscfg,
+	}
+	return server.ListenAndServeTLS(conf.TLSCertFile, conf.TLSKeyFile)
 
 }
 
 // Command assembles the definition of Command 'serve'
 var Command = &cli.Command{UsageText: serverUsageText, Flags: serverFlags, Main: serverMain}
+
+var wrapHandler = defaultWrapHandler
+
+// The default wrapper simply returns the normal handler and prefixes the path appropriately
+func defaultWrapHandler(path string, handler http.Handler, err error) (string, http.Handler, error) {
+	return v1APIPath(path), handler, err
+}
+
+// SetWrapHandler sets the wrap handler which is called for all endpoints
+// A custom wrap handler may be provided in order to add arbitrary server-side pre or post processing
+// of server-side HTTP handling of requests.
+func SetWrapHandler(wh func(path string, handler http.Handler, err error) (string, http.Handler, error)) {
+	wrapHandler = wh
+}
+
+// SetEndpoint can be used to add additional routes/endpoints to the HTTP server, or to override an existing route/endpoint
+func SetEndpoint(path string, getHandler func() (http.Handler, error)) {
+	endpoints[path] = getHandler
+}

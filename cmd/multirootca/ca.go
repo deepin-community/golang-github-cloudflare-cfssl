@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"errors"
 	"flag"
@@ -15,15 +16,17 @@ import (
 	"github.com/cloudflare/cfssl/signer"
 	"github.com/cloudflare/cfssl/signer/local"
 	"github.com/cloudflare/cfssl/whitelist"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	_ "github.com/go-sql-driver/mysql" // import to support MySQL
 	_ "github.com/lib/pq"              // import to support Postgres
+	_ "github.com/mattn/go-sqlite3"    // import to support SQLite
 )
 
 func parseSigner(root *config.Root) (signer.Signer, error) {
 	privateKey := root.PrivateKey
 	switch priv := privateKey.(type) {
-	case *rsa.PrivateKey, *ecdsa.PrivateKey:
+	case *rsa.PrivateKey, *ecdsa.PrivateKey, ed25519.PrivateKey:
 		s, err := local.NewSigner(priv, root.Certificate, signer.DefaultSigAlgo(priv), nil)
 		if err != nil {
 			return nil, err
@@ -51,6 +54,7 @@ func main() {
 	flagDefaultLabel := flag.String("l", "", "specify a default label")
 	flagEndpointCert := flag.String("tls-cert", "", "server certificate")
 	flagEndpointKey := flag.String("tls-key", "", "server private key")
+	flag.IntVar(&log.Level, "loglevel", log.LevelInfo, "Log level (0 = DEBUG, 5 = FATAL)")
 	flag.Parse()
 
 	if *flagRootFile == "" {
@@ -75,7 +79,6 @@ func main() {
 	}
 
 	defaultLabel = *flagDefaultLabel
-	initStats()
 
 	infoHandler, err := info.NewMultiHandler(signers, defaultLabel)
 	if err != nil {
@@ -85,14 +88,10 @@ func main() {
 	var localhost = whitelist.NewBasic()
 	localhost.Add(net.ParseIP("127.0.0.1"))
 	localhost.Add(net.ParseIP("::1"))
-	metrics, err := whitelist.NewHandlerFunc(dumpMetrics, metricsDisallowed, localhost)
-	if err != nil {
-		log.Criticalf("failed to set up the metrics whitelist: %v", err)
-	}
 
 	http.HandleFunc("/api/v1/cfssl/authsign", dispatchRequest)
 	http.Handle("/api/v1/cfssl/info", infoHandler)
-	http.Handle("/api/v1/cfssl/metrics", metrics)
+	http.Handle("/metrics", promhttp.Handler())
 
 	if *flagEndpointCert == "" && *flagEndpointKey == "" {
 		log.Info("Now listening on ", *flagAddr)

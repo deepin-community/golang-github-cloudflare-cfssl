@@ -17,6 +17,7 @@ The commands are defined in the cli subpackages and include
 	version	 prints the current cfssl version
 	genkey   generates a key and an associated CSR
 	gencert  generates a key and a signed certificate
+	gencsr   generates a certificate request
 	selfsign generates a self-signed certificate
 	ocspsign signs an OCSP response
 
@@ -29,7 +30,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 
 	"github.com/cloudflare/cfssl/config"
@@ -150,9 +151,9 @@ func Start(cmds map[string]*Command) error {
 // ReadStdin reads from stdin if the file is "-"
 func ReadStdin(filename string) ([]byte, error) {
 	if filename == "-" {
-		return ioutil.ReadAll(os.Stdin)
+		return io.ReadAll(os.Stdin)
 	}
-	return ioutil.ReadFile(filename)
+	return os.ReadFile(filename)
 }
 
 // PrintCert outputs a cert, key and csr to stdout

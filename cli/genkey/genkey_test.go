@@ -3,7 +3,7 @@ package genkey
 import (
 	"encoding/json"
 	"errors"
-	"io/ioutil"
+	"io"
 	"os"
 	"testing"
 
@@ -30,7 +30,7 @@ func newStdoutRedirect() (*stdoutRedirect, error) {
 func (pipe *stdoutRedirect) readAll() ([]byte, error) {
 	pipe.w.Close()
 	os.Stdout = pipe.saved
-	return ioutil.ReadAll(pipe.r)
+	return io.ReadAll(pipe.r)
 }
 
 func checkResponse(out []byte) error {
@@ -40,11 +40,11 @@ func checkResponse(out []byte) error {
 	}
 
 	if response["key"] == nil {
-		return errors.New("No key is outputted.")
+		return errors.New("no key is outputted")
 	}
 
 	if response["csr"] == nil {
-		return errors.New("No csr is outputted.")
+		return errors.New("no csr is outputted")
 	}
 
 	return nil
